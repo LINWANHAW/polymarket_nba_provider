@@ -52,13 +52,17 @@ PROXY_ENABLED = os.getenv("NBA_PROXY_ENABLED", "false").lower() in (
 )
 PROXY_SOURCE_URL = os.getenv(
     "NBA_PROXY_SOURCE_URL",
-    "https://api.proxyscrape.com/v4/free-proxy-list/get?"
-    "request=display_proxies&country=us&protocol=http&"
-    "proxy_format=protocolipport&format=text&timeout=20000"
+    "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/"
+    "proxies/protocols/socks4/data.txt"
 )
 PROXY_REFRESH_SEC = max(
     60,
     int(os.getenv("NBA_PROXY_REFRESH_SEC", "900"))
+)
+PROXY_DEFAULT_SCHEME = os.getenv("NBA_PROXY_DEFAULT_SCHEME", "").lower().strip()
+PROXY_TIMEOUT_SEC = max(
+    1,
+    int(os.getenv("NBA_PROXY_TIMEOUT", "10"))
 )
 _PROXY_STATE = {"proxies": [], "index": 0, "last_refresh": 0.0}
 _PROXY_LOCK = threading.Lock()
@@ -78,6 +82,18 @@ def _fetch_proxy_list() -> list[str]:
         return []
 
     proxies: list[str] = []
+    default_scheme = PROXY_DEFAULT_SCHEME or _infer_default_proxy_scheme(
+        PROXY_SOURCE_URL
+    )
+    if default_scheme not in (
+        "http",
+        "https",
+        "socks4",
+        "socks4a",
+        "socks5",
+        "socks5h",
+    ):
+        default_scheme = "http"
     allowed_schemes = (
         "http://",
         "https://",
@@ -91,7 +107,7 @@ def _fetch_proxy_list() -> list[str]:
         if not proxy:
             continue
         if "://" not in proxy:
-            proxy = f"http://{proxy}"
+            proxy = f"{default_scheme}://{proxy}"
         proxy_lower = proxy.lower()
         if not proxy_lower.startswith(allowed_schemes):
             continue
@@ -105,6 +121,17 @@ def _fetch_proxy_list() -> list[str]:
         seen.add(proxy)
         deduped.append(proxy)
     return deduped
+
+
+def _infer_default_proxy_scheme(source_url: str) -> str:
+    lowered = source_url.lower()
+    if "socks5" in lowered:
+        return "socks5"
+    if "socks4" in lowered:
+        return "socks4"
+    if "/https/" in lowered or "https" in lowered:
+        return "https"
+    return "http"
 
 
 def _refresh_proxy_pool(force: bool = False) -> None:
@@ -210,6 +237,12 @@ def _pick(payload: dict, *keys: str):
         if value is not None:
             return value
     return []
+
+
+def _resolve_timeout(default_timeout: int) -> int:
+    if not PROXY_ENABLED:
+        return default_timeout
+    return min(default_timeout, PROXY_TIMEOUT_SEC)
 
 
 def _team_stats_from_boxscore(box: dict):
@@ -760,7 +793,7 @@ async def health():
 
 @app.get("/scoreboard")
 async def scoreboard(date: str = Query(None, description="YYYY-MM-DD")):
-    timeout = int(os.getenv("NBA_API_TIMEOUT", "30"))
+    timeout = _resolve_timeout(int(os.getenv("NBA_API_TIMEOUT", "30")))
     game_date = _to_game_date(date) if date else None
     try:
         payload = _with_retries(
@@ -798,7 +831,7 @@ async def schedule(
             detail="Provide date=YYYY-MM-DD or from=YYYY-MM-DD&to=YYYY-MM-DD"
         )
 
-    timeout = int(os.getenv("NBA_API_TIMEOUT", "30"))
+    timeout = _resolve_timeout(int(os.getenv("NBA_API_TIMEOUT", "30")))
 
     if date:
         dates = [_parse_date(date)]
@@ -844,7 +877,7 @@ async def schedule(
 
 @app.get("/boxscore/traditional")
 async def boxscore_traditional(game_id: str = Query(..., description="NBA GAME_ID")):
-    timeout = int(os.getenv("NBA_API_TIMEOUT", "30"))
+    timeout = _resolve_timeout(int(os.getenv("NBA_API_TIMEOUT", "30")))
 
     try:
         payload = _with_retries(
@@ -871,7 +904,7 @@ async def boxscore_traditional(game_id: str = Query(..., description="NBA GAME_I
 
 @app.get("/boxscore/advanced")
 async def boxscore_advanced(game_id: str = Query(..., description="NBA GAME_ID")):
-    timeout = int(os.getenv("NBA_API_TIMEOUT", "30"))
+    timeout = _resolve_timeout(int(os.getenv("NBA_API_TIMEOUT", "30")))
 
     try:
         payload = _with_retries(
@@ -900,7 +933,7 @@ async def players_all(
     season: str = Query(..., description="e.g. 2024-25"),
     current_only: bool = Query(False)
 ):
-    timeout = int(os.getenv("NBA_API_TIMEOUT", "30"))
+    timeout = _resolve_timeout(int(os.getenv("NBA_API_TIMEOUT", "30")))
 
     payload = _with_retries(
         lambda: commonallplayers.CommonAllPlayers(
@@ -917,7 +950,7 @@ async def players_all(
 
 @app.get("/players/info")
 async def player_info(player_id: str = Query(..., description="NBA PLAYER_ID")):
-    timeout = int(os.getenv("NBA_API_TIMEOUT", "30"))
+    timeout = _resolve_timeout(int(os.getenv("NBA_API_TIMEOUT", "30")))
 
     cached = _get_cached_player_info(player_id)
     if cached:
@@ -963,7 +996,7 @@ async def team_roster(
     team_id: str = Query(..., description="NBA TEAM_ID"),
     season: str = Query(..., description="e.g. 2024-25")
 ):
-    timeout = int(os.getenv("NBA_API_TIMEOUT", "30"))
+    timeout = _resolve_timeout(int(os.getenv("NBA_API_TIMEOUT", "30")))
 
     payload = _with_retries(
         lambda: commonteamroster.CommonTeamRoster(
