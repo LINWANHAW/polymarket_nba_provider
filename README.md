@@ -106,6 +106,9 @@ Polymarket 查詢：
 - `GET /polymarket/price?marketIds=...`（CLOB live price）
 - `GET /polymarket/orderbook?marketIds=...`
 
+x402 付費端點：
+- `GET /x402/one-time`（每個 session 一次性支付 0.001 USDC）
+
 **NBA Service API（FastAPI）**
 - `GET /scoreboard?date=YYYY-MM-DD`
 - `GET /schedule?date=YYYY-MM-DD` 或 `GET /schedule?from=YYYY-MM-DD&to=YYYY-MM-DD`
@@ -154,6 +157,24 @@ npm run polymarket:sync
 - `POLYMARKET_CLOB_BASE=https://clob.polymarket.com`
 - `REDIS_HOST=redis`、`REDIS_PORT=6379`
 - `NBA_INJURY_REPORT_INDEX_URL=https://official.nba.com/nba-injury-report-2020-21-season/`
+
+**x402 付費設定（Base mainnet）**
+- `X402_ENABLED=true` 開啟 x402 paywall（預設 `false`）。
+- `X402_PAY_TO=0x...` 收款地址（Base 鏈上的 USDC）。
+- `X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
+- `X402_NETWORK=eip155:8453`（Base mainnet CAIP-2 network id）
+- `X402_PRICE=$0.001`
+- `X402_DESCRIPTION=One-time session access`
+- `X402_SESSION_TTL_MS=43200000`（session 解鎖在 server memory 的保留時間）
+- `X402_SESSION_COOKIE_NAME=x402_session`
+- `X402_CDP_API_KEY_ID=...`（CDP facilitator 認證）
+- `X402_CDP_API_KEY_SECRET=...`
+- `CORS_ORIGIN=http://localhost:3001`（需允許 frontend 帶 cookie 的跨域請求）
+- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=...`（前端 WalletConnect 連線）
+
+**x402 行為說明**
+- 以 cookie session 判斷「每個 session 一次」，成功付費後同一 session 不再要求付款。
+- 目前是 backend memory 保存 session 狀態；重啟 backend 或多實例時會失效，正式環境建議改用 Redis。
 
 **Repo 結構**
 - `backend/`：NestJS API、DB migration、NBA/Polymarket 同步邏輯。

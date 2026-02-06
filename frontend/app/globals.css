@@ -300,3 +300,45 @@ pre {
 .empty {
   color: var(--muted);
 }
+
+.x402-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.x402-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.x402-body {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.x402-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #efe6da;
+  background: #fff7ec;
+}
+
+.wallet-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.wallet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}

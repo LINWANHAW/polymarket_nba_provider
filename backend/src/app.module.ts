@@ -5,6 +5,7 @@ import { HealthController } from "./health.controller";
 import { join } from "path";
 import { NbaModule } from "./modules/nba/nba.module";
 import { PolymarketModule } from "./modules/polymarket/polymarket.module";
+import { X402Module } from "./modules/x402/x402.module";
 import { BullModule } from "@nestjs/bullmq";
 import { ScheduleModule } from "@nestjs/schedule";
 
@@ -31,7 +32,8 @@ import { ScheduleModule } from "@nestjs/schedule";
       migrations: [join(__dirname, "infra/db/migrations/*{.ts,.js}")]
     }),
     NbaModule,
-    PolymarketModule
+    PolymarketModule,
+    X402Module
   ],
   controllers: [HealthController]
 })

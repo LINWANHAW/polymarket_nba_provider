@@ -2,10 +2,30 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
+import { createX402Middleware } from "./infra/x402/x402.middleware";
 
 async function bootstrap() {
+  const corsOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+    : [];
   const app = await NestFactory.create(AppModule, {
-    cors: true
+    cors: {
+      origin: corsOrigins.length ? corsOrigins : true,
+      credentials: true,
+      allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "PAYMENT-SIGNATURE",
+        "X-PAYMENT"
+      ],
+      exposedHeaders: [
+        "PAYMENT-REQUIRED",
+        "PAYMENT-RESPONSE",
+        "X-PAYMENT-RESPONSE"
+      ]
+    }
   });
 
   const swaggerConfig = new DocumentBuilder()
@@ -15,6 +35,11 @@ async function bootstrap() {
     .build();
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup("docs", app, document);
+
+  const x402Middleware = createX402Middleware();
+  if (x402Middleware) {
+    app.use(x402Middleware);
+  }
 
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
   await app.listen(port);

@@ -124,6 +124,18 @@ export default async function Home({
         Pick a date to see matchups. Click a game to view player stats and the
         Polymarket markets tied to that day.
       </p>
+      <section>
+        <div className="section-header">
+          <h2>x402 Paywall</h2>
+          <Link className="inline-link" href="/x402">
+            Try the one-time paid API
+          </Link>
+        </div>
+        <p>
+          Unlock a protected endpoint with a single 0.001 USDC payment on Base.
+          After payment, the session is unlocked until the browser session ends.
+        </p>
+      </section>
 
       <section className="toolbar">
         <form className="date-form" method="get">
