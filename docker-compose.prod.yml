@@ -53,7 +53,7 @@ services:
       context: ./frontend
       args:
         # IMPORTANT: NEXT_PUBLIC_* is inlined at build time for client bundles.
-        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-https://api.example.com}
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-https://api.hoobs.polyox.io}
         NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-}
     container_name: polymarket_nba_frontend
     environment:
@@ -78,4 +78,3 @@ services:
 
 volumes:
   db_data:
-
