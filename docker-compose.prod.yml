@@ -1,0 +1,81 @@
+version: "3.9"
+
+services:
+  edge:
+    image: nginx:1.27-alpine
+    container_name: polymarket_nba_edge
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/certs:/etc/nginx/certs:ro
+
+  db:
+    image: postgres:15-alpine
+    container_name: polymarket_nba_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-polymarket_nba}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d polymarket_nba"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: polymarket_nba_backend
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-polymarket_nba}
+      NBA_SERVICE_BASE: http://nba_service:8000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # IMPORTANT: NEXT_PUBLIC_* is inlined at build time for client bundles.
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-https://api.example.com}
+        NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-}
+    container_name: polymarket_nba_frontend
+    environment:
+      INTERNAL_API_BASE: http://backend:3000
+    depends_on:
+      - backend
+
+  nba_service:
+    build:
+      context: ./nba-service
+    container_name: polymarket_nba_nba_service
+    environment:
+      NBA_API_TIMEOUT: 30
+      NBA_API_RETRY: 2
+      NBA_API_RETRY_BACKOFF_MS: 500
+    depends_on:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: polymarket_nba_redis
+
+volumes:
+  db_data:
+
