@@ -61,13 +61,43 @@ export class PolymarketService {
       const eventTagLinks: Array<{ eventPolymarketId: number; tagId: number }> =
         [];
 
-      for (const event of events) {
+      const activeEvents = this.filterActiveFutureEvents(events);
+      const upcomingEvents = this.filterUpcomingEvents(events);
+      const eventsToSync = this.mergeEvents(activeEvents, upcomingEvents);
+      if (eventsToSync.length === 0) {
+        this.logger.warn("no active or upcoming events found after filtering");
+        await this.upsertState(startedAt, 0, 0);
+        return;
+      }
+
+      const activeEventIds = new Set<number>();
+      for (const event of activeEvents) {
+        const polymarketEventId = this.parseInt(
+          event.id ?? event.eventId ?? event.polymarketEventId
+        );
+        if (polymarketEventId) {
+          activeEventIds.add(polymarketEventId);
+        }
+      }
+      const upcomingEventIds = new Set<number>();
+      for (const event of upcomingEvents) {
+        const polymarketEventId = this.parseInt(
+          event.id ?? event.eventId ?? event.polymarketEventId
+        );
+        if (polymarketEventId) {
+          upcomingEventIds.add(polymarketEventId);
+        }
+      }
+
+      for (const event of eventsToSync) {
         const polymarketEventId = this.parseInt(
           event.id ?? event.eventId ?? event.polymarketEventId
         );
         if (!polymarketEventId) {
           continue;
         }
+        const isActiveEvent = activeEventIds.has(polymarketEventId);
+        const isUpcomingEvent = upcomingEventIds.has(polymarketEventId);
 
         eventsPayload.push({
           polymarketEventId,
@@ -103,6 +133,15 @@ export class PolymarketService {
 
         const markets = Array.isArray(event.markets) ? event.markets : [];
         for (const market of markets) {
+          if (isActiveEvent) {
+            if (!this.isActiveFutureMarket(market)) {
+              continue;
+            }
+          } else if (isUpcomingEvent) {
+            if (!this.isUpcomingMarket(market)) {
+              continue;
+            }
+          }
           const polymarketMarketId = this.parseInt(
             market.id ?? market.marketId ?? market.polymarketMarketId
           );
@@ -467,6 +506,141 @@ export class PolymarketService {
       throw new BadRequestException("side must be buy or sell");
     }
     return side;
+  }
+
+  private filterRecentEvents(events: any[]) {
+    const lookbackDaysRaw = this.configService.get<string>(
+      "POLYMARKET_NBA_LOOKBACK_DAYS"
+    );
+    const lookbackDays = Number(lookbackDaysRaw || 7);
+    const lookaheadDaysRaw = this.configService.get<string>(
+      "POLYMARKET_NBA_LOOKAHEAD_DAYS"
+    );
+    const lookaheadDays = Number(lookaheadDaysRaw || 0);
+    if (
+      (!Number.isFinite(lookbackDays) || lookbackDays < 0) &&
+      (!Number.isFinite(lookaheadDays) || lookaheadDays < 0)
+    ) {
+      return events;
+    }
+
+    const now = new Date();
+    const windowStart = new Date(now);
+    const windowEnd = new Date(now);
+    if (Number.isFinite(lookbackDays) && lookbackDays > 0) {
+      windowStart.setUTCDate(windowStart.getUTCDate() - lookbackDays);
+    }
+    if (Number.isFinite(lookaheadDays) && lookaheadDays > 0) {
+      windowEnd.setUTCDate(windowEnd.getUTCDate() + lookaheadDays);
+    }
+
+    return events.filter((event) => {
+      const start = this.parseDate(
+        event.startDate ?? event.eventDate ?? event.startTime
+      );
+      const end = this.parseDate(event.endDate ?? event.resolveTime);
+
+      const isInWindow = (value: Date | null) =>
+        value ? value >= windowStart && value <= windowEnd : false;
+
+      if (isInWindow(start)) {
+        return true;
+      }
+      if (isInWindow(end)) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  private filterActiveFutureEvents(events: any[]) {
+    const now = new Date();
+    return events.filter((event) => {
+      const isActive = this.parseBoolean(event.active);
+      if (isActive !== true) {
+        return false;
+      }
+      const end = this.parseDate(event.endDate ?? event.resolveTime);
+      if (!end) {
+        return false;
+      }
+      return end.getTime() > now.getTime();
+    });
+  }
+
+  private filterUpcomingEvents(events: any[]) {
+    const raw = this.configService.get<string>(
+      "POLYMARKET_NBA_UPCOMING_DAYS"
+    );
+    const upcomingDays = Number(raw || 7);
+    if (!Number.isFinite(upcomingDays) || upcomingDays <= 0) {
+      return [];
+    }
+
+    const now = new Date();
+    const windowStart = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        0,
+        0,
+        0,
+        0
+      )
+    );
+    const windowEnd = new Date(windowStart);
+    windowEnd.setUTCDate(windowEnd.getUTCDate() + upcomingDays);
+    windowEnd.setUTCHours(23, 59, 59, 999);
+
+    return events.filter((event) => {
+      const start = this.parseDate(
+        event.startDate ?? event.eventDate ?? event.startTime
+      );
+      if (!start) {
+        return false;
+      }
+      return start >= windowStart && start <= windowEnd;
+    });
+  }
+
+  private isActiveFutureMarket(market: any) {
+    const isActive = this.parseBoolean(market.active);
+    if (isActive !== true) {
+      return false;
+    }
+    const end = this.parseDate(market.endDate ?? market.resolveTime);
+    if (!end) {
+      return false;
+    }
+    return end.getTime() > Date.now();
+  }
+
+  private isUpcomingMarket(market: any) {
+    const end = this.parseDate(market.endDate ?? market.resolveTime);
+    if (!end) {
+      return true;
+    }
+    return end.getTime() > Date.now();
+  }
+
+  private mergeEvents(primary: any[], secondary: any[]) {
+    const merged = new Map<number, any>();
+    const addEvent = (event: any) => {
+      const polymarketEventId = this.parseInt(
+        event?.id ?? event?.eventId ?? event?.polymarketEventId
+      );
+      if (!polymarketEventId) {
+        return;
+      }
+      if (!merged.has(polymarketEventId)) {
+        merged.set(polymarketEventId, event);
+      }
+    };
+
+    primary.forEach(addEvent);
+    secondary.forEach(addEvent);
+    return Array.from(merged.values());
   }
 
   private normalizeMarketIds(

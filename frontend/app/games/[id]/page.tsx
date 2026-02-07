@@ -195,10 +195,10 @@ export default async function GameDetail({
         `${serverApiBase}/nba/games/${gameId}/markets?page=1&pageSize=50`
       ),
       fetchJson(
-        `${serverApiBase}/nba/games?teamId=${game?.homeTeamId ?? ""}&page=1&pageSize=5`
+        `${serverApiBase}/nba/games?teamId=${game?.homeTeamId ?? ""}&status=finished&page=1&pageSize=200`
       ),
       fetchJson(
-        `${serverApiBase}/nba/games?teamId=${game?.awayTeamId ?? ""}&page=1&pageSize=5`
+        `${serverApiBase}/nba/games?teamId=${game?.awayTeamId ?? ""}&status=finished&page=1&pageSize=200`
       )
     ]);
 
@@ -331,10 +331,30 @@ export default async function GameDetail({
     };
   });
 
+  const isFinishedGame = (row: any) => {
+    const status = String(row?.status || "").toLowerCase();
+    if (status === "finished" || status === "final" || status === "complete") {
+      return true;
+    }
+    return row?.homeScore !== null && row?.awayScore !== null;
+  };
+
   const renderRecentGames = (rows: any[], teamId?: string) => {
-    const filtered = teamId
-      ? rows.filter((row) => row.id !== gameId)
-      : rows;
+    const cutoff = game?.dateTimeUtc
+      ? new Date(game.dateTimeUtc).getTime()
+      : null;
+    const filtered = rows.filter((row) => {
+      if (teamId && row.id === gameId) {
+        return false;
+      }
+      if (!isFinishedGame(row)) {
+        return false;
+      }
+      if (cutoff && row.dateTimeUtc) {
+        return new Date(row.dateTimeUtc).getTime() < cutoff;
+      }
+      return true;
+    });
     const recent = filtered.slice(0, 5);
     return renderTable(
       recent.map((row) => {
@@ -405,12 +425,12 @@ export default async function GameDetail({
         <div className="section-header">
           <h2>Recent Form</h2>
           <div className="hint">
-            <div>Last 5 games</div>
+            <div>Last 5 finished games before this matchup</div>
             <div>
-              {`${serverApiBase}/nba/games?teamId=${game?.awayTeamId ?? ""}&page=1&pageSize=5`}
+              {`${serverApiBase}/nba/games?teamId=${game?.awayTeamId ?? ""}&status=finished&page=1&pageSize=200`}
             </div>
             <div>
-              {`${serverApiBase}/nba/games?teamId=${game?.homeTeamId ?? ""}&page=1&pageSize=5`}
+              {`${serverApiBase}/nba/games?teamId=${game?.homeTeamId ?? ""}&status=finished&page=1&pageSize=200`}
             </div>
           </div>
         </div>

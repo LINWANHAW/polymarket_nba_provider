@@ -143,13 +143,18 @@ npm run polymarket:sync
 - NBA scoreboard：`*/10 * * * *`
 - NBA final results：`*/15 * * * *`
 - NBA injury report：`30 * * * *`
-- Polymarket NBA 同步：`*/5 * * * *`
+- Polymarket NBA 同步：`0 * * * *`（每小時）
+  - 條件 A：`active = true` 且 `end_date > now`
+  - 條件 B：`start_date` 落在「今天～未來 7 天」
 
 可透過環境變數覆寫，例如：
 - `NBA_SCOREBOARD_CRON`、`NBA_FINAL_RESULTS_CRON`、`NBA_INJURY_REPORT_CRON`
 - `POLYMARKET_NBA_SYNC_ENABLED`、`POLYMARKET_NBA_SYNC_CRON`
 - `POLYMARKET_NBA_ACTIVE`、`POLYMARKET_NBA_CLOSED`
 - `POLYMARKET_NBA_PAGE_SIZE`、`POLYMARKET_NBA_MAX_PAGES`
+- `POLYMARKET_NBA_LOOKBACK_DAYS`
+- `POLYMARKET_NBA_LOOKAHEAD_DAYS`（預設 0）
+- `POLYMARKET_NBA_UPCOMING_DAYS`（預設 7）
 - `NBA_FINAL_LOOKBACK_DAYS`、`NBA_SYNC_RANGE_MAX_DAYS`
 
 **主要環境變數（Docker Compose 預設）**

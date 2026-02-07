@@ -5,9 +5,9 @@ services:
     image: postgres:15-alpine
     container_name: polymarket_nba_db
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: polymarket_nba
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-polymarket_nba}
     ports:
       - "5432:5432"
     volumes:
@@ -28,11 +28,13 @@ services:
       NODE_ENV: development
       PORT: 3000
       CORS_ORIGIN: http://localhost:3001
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/polymarket_nba
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-polymarket_nba}
       NBA_SERVICE_BASE: http://nba_service:8000
       POLYMARKET_BASE: https://gamma-api.polymarket.com
       POLYMARKET_NBA_SYNC_ENABLED: "true"
-      POLYMARKET_NBA_SYNC_CRON: "*/5 * * * *"
+      POLYMARKET_NBA_SYNC_CRON: "0 * * * *"
+      POLYMARKET_NBA_LOOKBACK_DAYS: "7"
+      POLYMARKET_NBA_UPCOMING_DAYS: "7"
       POLYMARKET_NBA_ACTIVE: "true"
       POLYMARKET_NBA_CLOSED: "false"
       POLYMARKET_NBA_PAGE_SIZE: "50"
