@@ -240,21 +240,6 @@ export class NbaController {
     });
   }
 
-  @Get("games/:id")
-  @ApiOperation({ summary: "Get game" })
-  @ApiParam({ name: "id", required: true })
-  @ApiOkResponse({
-    description: "Get a game by id.",
-    type: GameDto
-  })
-  async getGame(@Param("id") id: string) {
-    const game = await this.nbaService.getGame(id);
-    if (!game) {
-      throw new NotFoundException("game not found");
-    }
-    return game;
-  }
-
   @Get("games/context")
   @ApiOperation({
     summary: "Get game context by date + team abbreviations"
@@ -300,6 +285,21 @@ export class NbaController {
       throw new NotFoundException("game not found");
     }
     return this.stripContextFields(context);
+  }
+
+  @Get("games/:id")
+  @ApiOperation({ summary: "Get game" })
+  @ApiParam({ name: "id", required: true })
+  @ApiOkResponse({
+    description: "Get a game by id.",
+    type: GameDto
+  })
+  async getGame(@Param("id") id: string) {
+    const game = await this.nbaService.getGame(id);
+    if (!game) {
+      throw new NotFoundException("game not found");
+    }
+    return game;
   }
 
   @Get("games/:id/markets")
