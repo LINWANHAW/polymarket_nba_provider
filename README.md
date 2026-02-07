@@ -100,6 +100,8 @@ NBA 查詢：
 - `GET /nba/player-stats`、`GET /nba/player-game-stat`
 - `GET /nba/injury-reports`、`GET /nba/injury-reports/entries`
 - `GET /nba/games/:id/markets`（比賽對應 Polymarket 市場）
+- `GET /nba/games/:id/context`（整合比賽/球隊/球員/近期戰績/傷兵/市場）
+- `POST /nba/analysis`（AI 賽局分析，需要 x402 付費）
 
 Polymarket 查詢：
 - `GET /polymarket/events`、`GET /polymarket/markets`
@@ -107,7 +109,7 @@ Polymarket 查詢：
 - `GET /polymarket/orderbook?marketIds=...`
 
 x402 付費端點：
-- `GET /x402/one-time`（每個 session 一次性支付 0.001 USDC）
+- `POST /nba/analysis`（每個 session 一次性支付後可呼叫 AI 分析）
 
 **NBA Service API（FastAPI）**
 - `GET /scoreboard?date=YYYY-MM-DD`
@@ -158,19 +160,26 @@ npm run polymarket:sync
 - `REDIS_HOST=redis`、`REDIS_PORT=6379`
 - `NBA_INJURY_REPORT_INDEX_URL=https://official.nba.com/nba-injury-report-2020-21-season/`
 
-**x402 付費設定（Base mainnet）**
+**x402 付費設定（Base Sepolia testnet 預設）**
 - `X402_ENABLED=true` 開啟 x402 paywall（預設 `false`）。
 - `X402_PAY_TO=0x...` 收款地址（Base 鏈上的 USDC）。
-- `X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
-- `X402_NETWORK=eip155:8453`（Base mainnet CAIP-2 network id）
+- `CDP_API_KEY_ID=...`
+- `CDP_API_KEY_SECRET=...`
+- `X402_FACILITATOR_URL=...`（預設 `https://www.x402.org/facilitator`）
+- `X402_NETWORK=eip155:84532`（Base Sepolia CAIP-2 network id）
 - `X402_PRICE=$0.001`
-- `X402_DESCRIPTION=One-time session access`
+- `X402_ANALYSIS_PRICE=$0.001`（可獨立設定 AI 分析價格）
+- `X402_ANALYSIS_DESCRIPTION=NBA AI analysis access`
+- `X402_SESSION_MODE=per_request`（每次呼叫都要付款；`disabled` 同義）
 - `X402_SESSION_TTL_MS=43200000`（session 解鎖在 server memory 的保留時間）
 - `X402_SESSION_COOKIE_NAME=x402_session`
-- `X402_CDP_API_KEY_ID=...`（CDP facilitator 認證）
-- `X402_CDP_API_KEY_SECRET=...`
 - `CORS_ORIGIN=http://localhost:3001`（需允許 frontend 帶 cookie 的跨域請求）
-- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=...`（前端 WalletConnect 連線）
+
+**OpenAI 設定（AI 賽局分析）**
+- `OPENAI_API_KEY=...`
+- `OPENAI_MODEL=gpt-4o-mini`
+- `OPENAI_TEMPERATURE=0.2`
+- `OPENAI_MAX_OUTPUT_TOKENS=700`
 
 **x402 行為說明**
 - 以 cookie session 判斷「每個 session 一次」，成功付費後同一 session 不再要求付款。

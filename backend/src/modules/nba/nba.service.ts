@@ -77,9 +77,48 @@ export type PaginationResult<T> = {
   total: number;
 };
 
+export type GameContext = {
+  game: Omit<Game, "homeTeam" | "awayTeam" | "polymarketEvent">;
+  homeTeam: Team | null;
+  awayTeam: Team | null;
+  homePlayers: Player[];
+  awayPlayers: Player[];
+  recentMatchups: Game[];
+  recentForm: {
+    home: Game[];
+    away: Game[];
+  };
+  injuries: {
+    report: InjuryReport | null;
+    entries: PaginationResult<InjuryReportEntry>;
+  };
+  polymarket: {
+    event: Event | null;
+    markets: PaginationResult<Market>;
+  };
+  teamStats: TeamGameStat[];
+};
+
+export type GameAnalysisResult = {
+  gameId: string;
+  homeTeam: string | null;
+  awayTeam: string | null;
+  homeWinPct: number | null;
+  awayWinPct: number | null;
+  confidence: number | null;
+  keyFactors: string[];
+  analysis: string;
+  model: string;
+  generatedAt: string;
+  disclaimer: string;
+  usage?: Record<string, any> | null;
+  raw?: string;
+};
+
 @Injectable()
 export class NbaService {
   private readonly nbaBase: string;
+  private openaiClient: any | null = null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -960,6 +999,150 @@ export class NbaService {
 
     const markets = await this.paginate(qb, page, pageSize);
     return { event, markets };
+  }
+
+  async getGameContext(
+    gameId: string,
+    options?: {
+      matchupLimit?: number;
+      recentLimit?: number;
+      marketPage?: number;
+      marketPageSize?: number;
+    }
+  ): Promise<GameContext | null> {
+    const game = await this.findGameWithTeams(gameId);
+    if (!game) {
+      return null;
+    }
+
+    const homeTeam =
+      game.homeTeam ??
+      (await this.teamRepo.findOne({ where: { id: game.homeTeamId } }));
+    const awayTeam =
+      game.awayTeam ??
+      (await this.teamRepo.findOne({ where: { id: game.awayTeamId } }));
+    const gameDate = game.dateTimeUtc ?? new Date();
+
+    const matchupLimit = this.clampLimit(options?.matchupLimit, 5, 1, 20);
+    const recentLimit = this.clampLimit(options?.recentLimit, 5, 1, 20);
+
+    const [homePlayers, awayPlayers, recentMatchups, recentHome, recentAway] =
+      await Promise.all([
+        homeTeam
+          ? this.listRosterForTeam(homeTeam.id, game.season, gameDate)
+          : Promise.resolve([]),
+        awayTeam
+          ? this.listRosterForTeam(awayTeam.id, game.season, gameDate)
+          : Promise.resolve([]),
+        homeTeam && awayTeam
+          ? this.listRecentMatchups(
+              homeTeam.id,
+              awayTeam.id,
+              gameDate,
+              matchupLimit
+            )
+          : Promise.resolve([]),
+        homeTeam
+          ? this.listRecentGamesForTeam(homeTeam.id, gameDate, recentLimit)
+          : Promise.resolve([]),
+        awayTeam
+          ? this.listRecentGamesForTeam(awayTeam.id, gameDate, recentLimit)
+          : Promise.resolve([])
+      ]);
+
+    const [teamStats, polymarket, injuries] = await Promise.all([
+      this.teamGameStatRepo.find({ where: { gameId: game.id } }),
+      this.listPolymarketMarketsForGame(game.id, {
+        page: options?.marketPage,
+        pageSize: options?.marketPageSize
+      }),
+      this.getLatestInjuryReportForTeams(
+        [homeTeam?.abbrev, awayTeam?.abbrev].filter(
+          (value): value is string => Boolean(value)
+        )
+      )
+    ]);
+
+    return {
+      game: this.stripGameRelations(game),
+      homeTeam: homeTeam ?? null,
+      awayTeam: awayTeam ?? null,
+      homePlayers,
+      awayPlayers,
+      recentMatchups,
+      recentForm: {
+        home: recentHome,
+        away: recentAway
+      },
+      injuries,
+      polymarket,
+      teamStats
+    };
+  }
+
+  async analyzeGame(
+    gameId: string,
+    options?: {
+      model?: string;
+      temperature?: number;
+      matchupLimit?: number;
+      recentLimit?: number;
+    }
+  ): Promise<GameAnalysisResult | null> {
+    const context = await this.getGameContext(gameId, {
+      matchupLimit: options?.matchupLimit,
+      recentLimit: options?.recentLimit,
+      marketPage: 1,
+      marketPageSize: 10
+    });
+    if (!context) {
+      return null;
+    }
+
+    const model =
+      options?.model ||
+      this.configService.get<string>("OPENAI_MODEL") ||
+      "gpt-4o-mini";
+    const envTemperature = Number(
+      this.configService.get<string>("OPENAI_TEMPERATURE")
+    );
+    const baseTemperature = Number.isFinite(envTemperature)
+      ? envTemperature
+      : 0.2;
+    const temperature = this.clampFloat(
+      options?.temperature ?? baseTemperature,
+      0,
+      1
+    );
+    const maxOutputTokens = this.parseEnvNumber(
+      "OPENAI_MAX_OUTPUT_TOKENS",
+      700
+    );
+
+    const payload = await this.buildAnalysisPayload(context);
+    const prompt = this.buildAnalysisPrompt(payload);
+
+    const client = await this.getOpenAIClient();
+    const response = await client.responses.create({
+      model,
+      input: prompt,
+      temperature,
+      max_output_tokens: maxOutputTokens
+    });
+
+    const outputText =
+      typeof response.output_text === "string"
+        ? response.output_text.trim()
+        : "";
+    const parsed = this.parseAnalysisJson(outputText);
+
+    return this.buildAnalysisResult({
+      context,
+      model,
+      outputText,
+      parsed,
+      usage: (response as any).usage ?? null
+    });
   }
 
   async recordConflict(input: {
@@ -3006,6 +3189,499 @@ export class NbaService {
   private clampPageSize(value?: number) {
     const size = value && value > 0 ? Math.floor(value) : 50;
     return Math.min(size, 200);
+  }
+
+  private clampLimit(
+    value: number | undefined,
+    fallback: number,
+    min: number,
+    max: number
+  ) {
+    const parsed = Number.isFinite(value as number)
+      ? Math.floor(value as number)
+      : fallback;
+    if (parsed < min) {
+      return min;
+    }
+    if (parsed > max) {
+      return max;
+    }
+    return parsed;
+  }
+
+  private clampFloat(value: number, min: number, max: number) {
+    if (!Number.isFinite(value)) {
+      return min;
+    }
+    return Math.min(Math.max(value, min), max);
+  }
+
+  private parseEnvNumber(key: string, fallback: number) {
+    const raw = this.configService.get<string>(key);
+    const parsed = raw !== undefined ? Number(raw) : NaN;
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  private async findGameWithTeams(gameId: string) {
+    return this.gameRepo.findOne({
+      where: [
+        { id: gameId, provider: PROVIDER },
+        { provider: PROVIDER, providerGameId: gameId }
+      ],
+      relations: ["homeTeam", "awayTeam"]
+    });
+  }
+
+  private stripGameRelations(game: Game) {
+    const { homeTeam, awayTeam, polymarketEvent, ...rest } = game as Game & {
+      homeTeam?: Team;
+      awayTeam?: Team;
+      polymarketEvent?: Event | null;
+    };
+    return rest;
+  }
+
+  private async listRosterForTeam(
+    teamId: string,
+    season: number,
+    asOf: Date
+  ) {
+    const qb = this.playerSeasonTeamRepo
+      .createQueryBuilder("pst")
+      .innerJoinAndSelect("pst.player", "player")
+      .where("pst.provider = :provider", { provider: PROVIDER })
+      .andWhere("player.provider = :provider", { provider: PROVIDER })
+      .andWhere("pst.team_id = :teamId", { teamId })
+      .andWhere("pst.season = :season", { season })
+      .andWhere("pst.from_utc <= :asOf", { asOf })
+      .andWhere("(pst.to_utc IS NULL OR pst.to_utc >= :asOf)", {
+        asOf
+      })
+      .orderBy("player.displayName", "ASC");
+
+    let rows = await qb.getMany();
+    if (rows.length === 0) {
+      rows = await this.playerSeasonTeamRepo
+        .createQueryBuilder("pst")
+        .innerJoinAndSelect("pst.player", "player")
+        .where("pst.provider = :provider", { provider: PROVIDER })
+        .andWhere("player.provider = :provider", { provider: PROVIDER })
+        .andWhere("pst.team_id = :teamId", { teamId })
+        .andWhere("pst.season = :season", { season })
+        .andWhere("pst.to_utc IS NULL")
+        .orderBy("player.displayName", "ASC")
+        .getMany();
+    }
+
+    const players = rows
+      .map((row) => row.player)
+      .filter((player): player is Player => Boolean(player));
+    const seen = new Set<string>();
+    return players.filter((player) => {
+      if (seen.has(player.id)) {
+        return false;
+      }
+      seen.add(player.id);
+      return true;
+    });
+  }
+
+  private async listRecentMatchups(
+    homeTeamId: string,
+    awayTeamId: string,
+    before: Date,
+    limit: number
+  ) {
+    return this.gameRepo
+      .createQueryBuilder("game")
+      .where("game.provider = :provider", { provider: PROVIDER })
+      .andWhere(
+        "(game.home_team_id = :homeTeamId AND game.away_team_id = :awayTeamId) OR (game.home_team_id = :awayTeamId AND game.away_team_id = :homeTeamId)",
+        { homeTeamId, awayTeamId }
+      )
+      .andWhere("game.date_time_utc < :before", { before })
+      .orderBy("game.dateTimeUtc", "DESC")
+      .take(limit)
+      .getMany();
+  }
+
+  private async listRecentGamesForTeam(
+    teamId: string,
+    before: Date,
+    limit: number
+  ) {
+    return this.gameRepo
+      .createQueryBuilder("game")
+      .where("game.provider = :provider", { provider: PROVIDER })
+      .andWhere(
+        "(game.home_team_id = :teamId OR game.away_team_id = :teamId)",
+        { teamId }
+      )
+      .andWhere("game.date_time_utc < :before", { before })
+      .orderBy("game.dateTimeUtc", "DESC")
+      .take(limit)
+      .getMany();
+  }
+
+  private async getLatestInjuryReportForTeams(teamAbbrevs: string[]) {
+    const report = await this.injuryReportRepo
+      .createQueryBuilder("report")
+      .orderBy("report.reportDate", "DESC")
+      .addOrderBy("report.createdAt", "DESC")
+      .getOne();
+
+    if (!report) {
+      return {
+        report: null,
+        entries: { data: [], page: 1, pageSize: 0, total: 0 }
+      };
+    }
+
+    const qb = this.injuryReportEntryRepo.createQueryBuilder("entry");
+    qb.where("entry.report_id = :reportId", { reportId: report.id });
+    qb.orderBy("entry.createdAt", "DESC");
+    let data = await qb.getMany();
+
+    if (teamAbbrevs.length > 0) {
+      const teams = await this.teamRepo.find({
+        where: { provider: PROVIDER, abbrev: In(teamAbbrevs) }
+      });
+      const teamIds = new Set(teams.map((team) => team.id));
+      const normalized = new Set<string>();
+
+      for (const team of teams) {
+        if (team.abbrev) {
+          normalized.add(this.normalizeName(team.abbrev));
+        }
+        if (team.name) {
+          normalized.add(this.normalizeName(team.name));
+        }
+      }
+      for (const abbrev of teamAbbrevs) {
+        normalized.add(this.normalizeName(abbrev));
+      }
+
+      data = data.filter((entry) => {
+        if (entry.teamId && teamIds.has(entry.teamId)) {
+          return true;
+        }
+        const label = entry.teamAbbrev || "";
+        const normalizedLabel = this.normalizeName(label);
+        return normalizedLabel ? normalized.has(normalizedLabel) : false;
+      });
+    }
+
+    return {
+      report,
+      entries: {
+        data,
+        page: 1,
+        pageSize: data.length,
+        total: data.length
+      }
+    };
+  }
+
+  private async getOpenAIClient() {
+    if (this.openaiClient) {
+      return this.openaiClient;
+    }
+    const apiKey = this.configService.get<string>("OPENAI_API_KEY");
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY is required to use /nba/analysis.");
+    }
+    const { default: OpenAI } = await import("openai");
+    this.openaiClient = new OpenAI({ apiKey });
+    return this.openaiClient;
+  }
+
+  private async buildAnalysisPayload(context: GameContext) {
+    const teamIds = new Set<string>();
+    const collectTeams = (game: Game) => {
+      if (game.homeTeamId) {
+        teamIds.add(game.homeTeamId);
+      }
+      if (game.awayTeamId) {
+        teamIds.add(game.awayTeamId);
+      }
+    };
+
+    context.recentMatchups.forEach(collectTeams);
+    context.recentForm.home.forEach(collectTeams);
+    context.recentForm.away.forEach(collectTeams);
+    if (context.homeTeam?.id) {
+      teamIds.add(context.homeTeam.id);
+    }
+    if (context.awayTeam?.id) {
+      teamIds.add(context.awayTeam.id);
+    }
+
+    const teamNameById = await this.buildTeamNameLookup(
+      Array.from(teamIds)
+    );
+
+    const summarizeGame = (game: Game) => {
+      const homeName =
+        teamNameById.get(game.homeTeamId) ?? game.homeTeamId;
+      const awayName =
+        teamNameById.get(game.awayTeamId) ?? game.awayTeamId;
+      return {
+        date: game.dateTimeUtc?.toISOString(),
+        status: game.status,
+        homeTeam: homeName,
+        awayTeam: awayName,
+        homeScore: game.homeScore,
+        awayScore: game.awayScore
+      };
+    };
+
+    const summarizeGameForTeam = (game: Game, teamId: string) => {
+      const isHome = game.homeTeamId === teamId;
+      const opponentId = isHome ? game.awayTeamId : game.homeTeamId;
+      const opponent =
+        teamNameById.get(opponentId) ?? opponentId ?? "unknown";
+      const teamScore = isHome ? game.homeScore : game.awayScore;
+      const opponentScore = isHome ? game.awayScore : game.homeScore;
+      let result: string | null = null;
+      if (teamScore !== null && opponentScore !== null) {
+        if (teamScore > opponentScore) {
+          result = "W";
+        } else if (teamScore < opponentScore) {
+          result = "L";
+        } else {
+          result = "T";
+        }
+      }
+      return {
+        date: game.dateTimeUtc?.toISOString(),
+        opponent,
+        isHome,
+        teamScore,
+        opponentScore,
+        result,
+        status: game.status
+      };
+    };
+
+    const rosterLimit = 12;
+    const homeRoster = context.homePlayers
+      .slice(0, rosterLimit)
+      .map((player) => player.displayName || `${player.firstName} ${player.lastName}`.trim())
+      .filter(Boolean);
+    const awayRoster = context.awayPlayers
+      .slice(0, rosterLimit)
+      .map((player) => player.displayName || `${player.firstName} ${player.lastName}`.trim())
+      .filter(Boolean);
+
+    const injuries = context.injuries.entries.data.map((entry) => ({
+      team: entry.teamAbbrev ?? entry.teamId ?? null,
+      player: entry.playerName ?? null,
+      status: entry.status ?? null,
+      injury: entry.injury ?? null,
+      notes: entry.notes ?? null
+    }));
+
+    const markets = context.polymarket.markets.data
+      .slice(0, 5)
+      .map((market) => ({
+        marketId: market.polymarketMarketId ?? market.id,
+        question: market.question,
+        outcomes: market.outcomes,
+        outcomePrices: market.outcomePrices,
+        marketType: market.marketType,
+        liquidity: market.liquidity,
+        volume: market.volume
+      }));
+
+    return {
+      game: {
+        id: context.game.id,
+        providerGameId: context.game.providerGameId,
+        dateTimeUtc: context.game.dateTimeUtc?.toISOString(),
+        status: context.game.status,
+        season: context.game.season,
+        homeScore: context.game.homeScore,
+        awayScore: context.game.awayScore
+      },
+      teams: {
+        home: context.homeTeam?.name ?? context.homeTeam?.abbrev ?? context.game.homeTeamId,
+        away: context.awayTeam?.name ?? context.awayTeam?.abbrev ?? context.game.awayTeamId
+      },
+      roster: {
+        home: homeRoster,
+        away: awayRoster
+      },
+      recentMatchups: context.recentMatchups.map(summarizeGame),
+      recentForm: {
+        home: context.recentForm.home.map((game) =>
+          summarizeGameForTeam(game, context.game.homeTeamId)
+        ),
+        away: context.recentForm.away.map((game) =>
+          summarizeGameForTeam(game, context.game.awayTeamId)
+        )
+      },
+      injuries,
+      markets
+    };
+  }
+
+  private buildAnalysisPrompt(payload: Record<string, any>) {
+    return [
+      "You are an NBA analytics assistant. Use only the data provided.",
+      "Return JSON only, no markdown.",
+      "Schema: { homeWinPct: number, awayWinPct: number, confidence: number, keyFactors: string[], analysis: string }",
+      "Rules: homeWinPct + awayWinPct must equal 100. confidence is 0-100. analysis is 2-4 sentences. keyFactors has 3-6 short phrases.",
+      "Data:",
+      JSON.stringify(payload, null, 2)
+    ].join("\n");
+  }
+
+  private parseAnalysisJson(text: string) {
+    if (!text) {
+      return null;
+    }
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    const candidate = fenced ? fenced[1] : text.trim();
+    const jsonStart = candidate.indexOf("{");
+    const jsonEnd = candidate.lastIndexOf("}");
+    if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+      return null;
+    }
+    const jsonText = candidate.slice(jsonStart, jsonEnd + 1);
+    try {
+      return JSON.parse(jsonText) as Record<string, any>;
+    } catch {
+      return null;
+    }
+  }
+
+  private buildAnalysisResult(input: {
+    context: GameContext;
+    model: string;
+    outputText: string;
+    parsed: Record<string, any> | null;
+    usage: Record<string, any> | null;
+  }): GameAnalysisResult {
+    const disclaimer =
+      "AI-generated analysis. For informational use only; not financial advice.";
+    const base: GameAnalysisResult = {
+      gameId: input.context.game.id,
+      homeTeam:
+        input.context.homeTeam?.name ??
+        input.context.homeTeam?.abbrev ??
+        null,
+      awayTeam:
+        input.context.awayTeam?.name ??
+        input.context.awayTeam?.abbrev ??
+        null,
+      homeWinPct: null,
+      awayWinPct: null,
+      confidence: null,
+      keyFactors: [],
+      analysis: input.outputText || "",
+      model: input.model,
+      generatedAt: new Date().toISOString(),
+      disclaimer,
+      usage: input.usage ?? null
+    };
+
+    if (!input.parsed) {
+      return { ...base, raw: input.outputText || undefined };
+    }
+
+    const parsed = input.parsed;
+    let homeWinPct =
+      this.coerceNumber(parsed.homeWinPct) ??
+      this.coerceNumber(parsed.home_win_pct) ??
+      this.coerceNumber(parsed.homeWinProbability) ??
+      this.coerceNumber(parsed.home_win_probability);
+    let awayWinPct =
+      this.coerceNumber(parsed.awayWinPct) ??
+      this.coerceNumber(parsed.away_win_pct) ??
+      this.coerceNumber(parsed.awayWinProbability) ??
+      this.coerceNumber(parsed.away_win_probability);
+
+    if (homeWinPct !== null && awayWinPct === null) {
+      awayWinPct = 100 - homeWinPct;
+    }
+    if (awayWinPct !== null && homeWinPct === null) {
+      homeWinPct = 100 - awayWinPct;
+    }
+    if (homeWinPct !== null && awayWinPct !== null) {
+      const sum = homeWinPct + awayWinPct;
+      if (sum > 0 && Math.abs(sum - 100) > 0.5) {
+        const scale = 100 / sum;
+        homeWinPct = this.roundPct(homeWinPct * scale);
+        awayWinPct = this.roundPct(awayWinPct * scale);
+      } else {
+        homeWinPct = this.roundPct(homeWinPct);
+        awayWinPct = this.roundPct(awayWinPct);
+      }
+    }
+
+    const confidence =
+      this.coerceNumber(parsed.confidence) ??
+      this.coerceNumber(parsed.confidencePct) ??
+      this.coerceNumber(parsed.confidence_pct);
+
+    const keyFactorsRaw =
+      parsed.keyFactors ??
+      parsed.key_factors ??
+      parsed.factors ??
+      [];
+    const keyFactors = Array.isArray(keyFactorsRaw)
+      ? keyFactorsRaw
+          .map((item: any) =>
+            typeof item === "string" ? item.trim() : String(item || "").trim()
+          )
+          .filter((item: string) => Boolean(item))
+          .slice(0, 8)
+      : [];
+
+    const analysis =
+      typeof parsed.analysis === "string"
+        ? parsed.analysis
+        : typeof parsed.summary === "string"
+          ? parsed.summary
+          : input.outputText || "";
+
+    return {
+      ...base,
+      homeWinPct:
+        homeWinPct !== null ? this.clampFloat(homeWinPct, 0, 100) : null,
+      awayWinPct:
+        awayWinPct !== null ? this.clampFloat(awayWinPct, 0, 100) : null,
+      confidence:
+        confidence !== null ? this.clampFloat(confidence, 0, 100) : null,
+      keyFactors,
+      analysis
+    };
+  }
+
+  private coerceNumber(value: unknown): number | null {
+    if (value === undefined || value === null || value === "") {
+      return null;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private roundPct(value: number) {
+    return Math.round(value * 10) / 10;
+  }
+
+  private async buildTeamNameLookup(teamIds: string[]) {
+    if (teamIds.length === 0) {
+      return new Map<string, string>();
+    }
+    const teams = await this.teamRepo.find({
+      where: { id: In(teamIds) }
+    });
+    const map = new Map<string, string>();
+    for (const team of teams) {
+      map.set(team.id, team.name || team.abbrev || team.id);
+    }
+    return map;
   }
 
   private async paginate<T extends ObjectLiteral>(

@@ -3,32 +3,20 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider, createConfig, http } from "wagmi";
-import { injected, walletConnect } from "wagmi/connectors";
-import { base } from "wagmi/chains";
+import { injected } from "wagmi/connectors";
+import { baseSepolia } from "wagmi/chains";
 
-const walletConnectProjectId =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "";
-
-const connectors = [injected()];
-if (walletConnectProjectId) {
-  connectors.push(
-    walletConnect({
-      projectId: walletConnectProjectId,
-      metadata: {
-        name: "Polymarket NBA",
-        description: "x402 paywalled endpoint",
-        url: "http://localhost:3001",
-        icons: ["https://avatars.githubusercontent.com/u/108554348?s=200&v=4"]
-      }
-    })
-  );
-}
+const connectors = [
+  injected({
+    target: "metaMask"
+  })
+];
 
 const config = createConfig({
-  chains: [base],
+  chains: [baseSepolia],
   connectors,
   transports: {
-    [base.id]: http()
+    [baseSepolia.id]: http()
   }
 });
 

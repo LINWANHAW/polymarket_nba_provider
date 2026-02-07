@@ -1,6 +1,12 @@
 import { Controller, Get, Query } from "@nestjs/common";
-import { ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
+import { ApiOkResponse, ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
 import { PolymarketService } from "./polymarket.service";
+import {
+  PaginatedEventDto,
+  PaginatedMarketDto,
+  PolymarketOrderbookResponseDto,
+  PolymarketPriceResponseDto
+} from "./dto/swagger.dto";
 
 @Controller("polymarket")
 @ApiTags("Polymarket")
@@ -13,6 +19,10 @@ export class PolymarketController {
   @ApiQuery({ name: "search", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List Polymarket events with pagination.",
+    type: PaginatedEventDto
+  })
   async listEvents(
     @Query("date") date?: string,
     @Query("search") search?: string,
@@ -34,6 +44,10 @@ export class PolymarketController {
   @ApiQuery({ name: "eventId", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List Polymarket markets with pagination.",
+    type: PaginatedMarketDto
+  })
   async listMarkets(
     @Query("date") date?: string,
     @Query("search") search?: string,
@@ -56,6 +70,10 @@ export class PolymarketController {
   @ApiQuery({ name: "marketId", required: false })
   @ApiQuery({ name: "marketIds", required: false, description: "comma separated" })
   @ApiQuery({ name: "side", required: false, description: "buy|sell" })
+  @ApiOkResponse({
+    description: "Live prices from Polymarket CLOB (tokenId or marketIds).",
+    type: PolymarketPriceResponseDto
+  })
   async getPrice(
     @Query("tokenId") tokenId?: string,
     @Query("marketId") marketId?: string,
@@ -81,6 +99,10 @@ export class PolymarketController {
   @ApiQuery({ name: "tokenId", required: false })
   @ApiQuery({ name: "marketId", required: false })
   @ApiQuery({ name: "marketIds", required: false, description: "comma separated" })
+  @ApiOkResponse({
+    description: "Live orderbooks from Polymarket CLOB (tokenId or marketIds).",
+    type: PolymarketOrderbookResponseDto
+  })
   async getOrderbook(
     @Query("tokenId") tokenId?: string,
     @Query("marketId") marketId?: string,

@@ -18,12 +18,15 @@ async function bootstrap() {
         "Content-Type",
         "Authorization",
         "PAYMENT-SIGNATURE",
-        "X-PAYMENT"
+        "X-PAYMENT",
+        "Access-Control-Expose-Headers"
       ],
       exposedHeaders: [
         "PAYMENT-REQUIRED",
         "PAYMENT-RESPONSE",
-        "X-PAYMENT-RESPONSE"
+        "X-PAYMENT-RESPONSE",
+        "X402-DEBUG-HAS-PAYMENT",
+        "X402-DEBUG-PAYMENT-LEN"
       ]
     }
   });

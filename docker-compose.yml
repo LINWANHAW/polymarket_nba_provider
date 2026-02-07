@@ -22,6 +22,8 @@ services:
     build:
       context: ./backend
     container_name: polymarket_nba_backend
+    env_file:
+      - ./backend/.env
     environment:
       NODE_ENV: development
       PORT: 3000
@@ -38,14 +40,6 @@ services:
       NBA_INJURY_REPORT_CRON: "30 * * * *"
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      X402_ENABLED: "false"
-      X402_FACILITATOR_URL: https://api.cdp.coinbase.com/platform/v2/x402
-      X402_NETWORK: eip155:8453
-      X402_PRICE: "$0.001"
-      X402_DESCRIPTION: "One-time session access"
-      # X402_PAY_TO: "0xYourBaseAddress"
-      # X402_CDP_API_KEY_ID: "your-cdp-api-key-id"
-      # X402_CDP_API_KEY_SECRET: "your-cdp-api-key-secret"
     ports:
       - "3000:3000"
     depends_on:

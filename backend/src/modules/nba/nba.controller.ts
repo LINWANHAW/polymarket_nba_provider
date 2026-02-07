@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   NotFoundException,
@@ -7,10 +8,35 @@ import {
   Post,
   Query
 } from "@nestjs/common";
-import { ApiOperation, ApiParam, ApiQuery, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBody,
+  ApiOkResponse,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiTags
+} from "@nestjs/swagger";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import { NbaService } from "./nba.service";
+import {
+  GameAnalysisRequestDto,
+  GameAnalysisResponseDto,
+  GameContextResponseDto,
+  GameDto,
+  GameMarketsResponseDto,
+  InjuryReportEntriesResponseDto,
+  PaginatedDataConflictDto,
+  PaginatedGameDto,
+  PaginatedInjuryReportDto,
+  PaginatedPlayerDto,
+  PaginatedPlayerGameStatDto,
+  PaginatedTeamGameStatDto,
+  PlayerDto,
+  SyncJobResponseDto,
+  SyncRangeResponseDto,
+  TeamDto
+} from "./dto/swagger.dto";
 
 @Controller("nba")
 @ApiTags("NBA")
@@ -23,6 +49,10 @@ export class NbaController {
   @Post("sync/scoreboard")
   @ApiOperation({ summary: "Enqueue scoreboard sync" })
   @ApiQuery({ name: "date", required: false, description: "YYYY-MM-DD" })
+  @ApiOkResponse({
+    description: "BullMQ job enqueued for scoreboard sync.",
+    type: SyncJobResponseDto
+  })
   async syncScoreboard(@Query("date") date?: string) {
     return this.queue.add("sync-scoreboard", date ? { date } : {});
   }
@@ -30,6 +60,10 @@ export class NbaController {
   @Post("sync/final-results")
   @ApiOperation({ summary: "Enqueue final results sync" })
   @ApiQuery({ name: "date", required: false, description: "YYYY-MM-DD" })
+  @ApiOkResponse({
+    description: "BullMQ job enqueued for final results sync.",
+    type: SyncJobResponseDto
+  })
   async syncFinalResults(@Query("date") date?: string) {
     return this.queue.add("sync-final-results", date ? { date } : {});
   }
@@ -38,6 +72,10 @@ export class NbaController {
   @ApiOperation({ summary: "Enqueue player game stats sync" })
   @ApiQuery({ name: "date", required: false, description: "YYYY-MM-DD" })
   @ApiQuery({ name: "gameId", required: false, description: "NBA GAME_ID" })
+  @ApiOkResponse({
+    description: "BullMQ job enqueued for player game stats sync.",
+    type: SyncJobResponseDto
+  })
   async syncPlayerGameStats(
     @Query("date") date?: string,
     @Query("gameId") gameId?: string
@@ -51,6 +89,10 @@ export class NbaController {
   @Post("sync/players")
   @ApiOperation({ summary: "Enqueue players sync" })
   @ApiQuery({ name: "season", required: true, description: "e.g. 2024-25" })
+  @ApiOkResponse({
+    description: "BullMQ job enqueued for players sync.",
+    type: SyncJobResponseDto
+  })
   async syncPlayers(@Query("season") season: string) {
     if (!season) {
       throw new BadRequestException("season is required, e.g. 2024-25");
@@ -61,6 +103,10 @@ export class NbaController {
   @Post("sync/player-season-teams")
   @ApiOperation({ summary: "Enqueue player season teams sync" })
   @ApiQuery({ name: "season", required: true, description: "e.g. 2024-25" })
+  @ApiOkResponse({
+    description: "BullMQ job enqueued for player season teams sync.",
+    type: SyncJobResponseDto
+  })
   async syncPlayerSeasonTeams(@Query("season") season: string) {
     if (!season) {
       throw new BadRequestException("season is required, e.g. 2024-25");
@@ -70,6 +116,10 @@ export class NbaController {
 
   @Post("sync/injury-report")
   @ApiOperation({ summary: "Enqueue injury report sync" })
+  @ApiOkResponse({
+    description: "BullMQ job enqueued for injury report sync.",
+    type: SyncJobResponseDto
+  })
   async syncInjuryReport() {
     return this.queue.add("sync-injury-report", {});
   }
@@ -79,6 +129,10 @@ export class NbaController {
   @ApiQuery({ name: "from", required: true, description: "YYYY-MM-DD" })
   @ApiQuery({ name: "to", required: true, description: "YYYY-MM-DD" })
   @ApiQuery({ name: "mode", required: false, description: "scoreboard|final|player|both" })
+  @ApiOkResponse({
+    description: "Range sync enqueued for each date in range.",
+    type: SyncRangeResponseDto
+  })
   async syncRange(
     @Query("from") from?: string,
     @Query("to") to?: string,
@@ -112,6 +166,11 @@ export class NbaController {
 
   @Get("teams")
   @ApiOperation({ summary: "List teams" })
+  @ApiOkResponse({
+    description: "List NBA teams.",
+    type: TeamDto,
+    isArray: true
+  })
   async listTeams() {
     return this.nbaService.listTeams();
   }
@@ -119,6 +178,10 @@ export class NbaController {
   @Get("teams/:id")
   @ApiOperation({ summary: "Get team" })
   @ApiParam({ name: "id", required: true })
+  @ApiOkResponse({
+    description: "Get a team by id.",
+    type: TeamDto
+  })
   async getTeam(@Param("id") id: string) {
     const team = await this.nbaService.getTeam(id);
     if (!team) {
@@ -137,6 +200,10 @@ export class NbaController {
   @ApiQuery({ name: "teamId", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List games with pagination.",
+    type: PaginatedGameDto
+  })
   async listGames(
     @Query("date") date?: string,
     @Query("from") from?: string,
@@ -176,6 +243,10 @@ export class NbaController {
   @Get("games/:id")
   @ApiOperation({ summary: "Get game" })
   @ApiParam({ name: "id", required: true })
+  @ApiOkResponse({
+    description: "Get a game by id.",
+    type: GameDto
+  })
   async getGame(@Param("id") id: string) {
     const game = await this.nbaService.getGame(id);
     if (!game) {
@@ -184,11 +255,47 @@ export class NbaController {
     return game;
   }
 
+  @Get("games/:id/context")
+  @ApiOperation({
+    summary: "Get game context (teams, roster, injuries, markets, recent form)"
+  })
+  @ApiParam({ name: "id", required: true })
+  @ApiQuery({ name: "matchupLimit", required: false })
+  @ApiQuery({ name: "recentLimit", required: false })
+  @ApiQuery({ name: "marketPage", required: false })
+  @ApiQuery({ name: "marketPageSize", required: false })
+  @ApiOkResponse({
+    description: "Aggregated context for a single matchup.",
+    type: GameContextResponseDto
+  })
+  async getGameContext(
+    @Param("id") id: string,
+    @Query("matchupLimit") matchupLimit?: string,
+    @Query("recentLimit") recentLimit?: string,
+    @Query("marketPage") marketPage?: string,
+    @Query("marketPageSize") marketPageSize?: string
+  ) {
+    const context = await this.nbaService.getGameContext(id, {
+      matchupLimit: matchupLimit ? Number(matchupLimit) : undefined,
+      recentLimit: recentLimit ? Number(recentLimit) : undefined,
+      marketPage: marketPage ? Number(marketPage) : undefined,
+      marketPageSize: marketPageSize ? Number(marketPageSize) : undefined
+    });
+    if (!context) {
+      throw new NotFoundException("game not found");
+    }
+    return this.stripContextFields(context);
+  }
+
   @Get("games/:id/markets")
   @ApiOperation({ summary: "List Polymarket markets for game" })
   @ApiParam({ name: "id", required: true })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "Polymarket event and markets for the given game.",
+    type: GameMarketsResponseDto
+  })
   async listGameMarkets(
     @Param("id") id: string,
     @Query("page") page?: string,
@@ -200,6 +307,35 @@ export class NbaController {
     });
   }
 
+  @Post("analysis")
+  @ApiOperation({ summary: "AI analysis for a matchup (x402 paid)" })
+  @ApiBody({ type: GameAnalysisRequestDto })
+  @ApiOkResponse({
+    description: "AI analysis result with win probabilities.",
+    type: GameAnalysisResponseDto
+  })
+  async analyzeGame(@Body() body: GameAnalysisRequestDto) {
+    if (!body?.gameId) {
+      throw new BadRequestException("gameId is required");
+    }
+
+    const result = await this.nbaService.analyzeGame(body.gameId, {
+      model: body.model,
+      temperature:
+        body.temperature !== undefined ? Number(body.temperature) : undefined,
+      matchupLimit:
+        body.matchupLimit !== undefined ? Number(body.matchupLimit) : undefined,
+      recentLimit:
+        body.recentLimit !== undefined ? Number(body.recentLimit) : undefined
+    });
+
+    if (!result) {
+      throw new NotFoundException("game not found");
+    }
+
+    return result;
+  }
+
   @Get("players")
   @ApiOperation({ summary: "List players" })
   @ApiQuery({ name: "search", required: false })
@@ -209,6 +345,10 @@ export class NbaController {
   @ApiQuery({ name: "currentOnly", required: false, description: "true|false" })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List players with pagination.",
+    type: PaginatedPlayerDto
+  })
   async listPlayers(
     @Query("search") search?: string,
     @Query("isActive") isActive?: string,
@@ -232,6 +372,10 @@ export class NbaController {
   @Get("players/:id")
   @ApiOperation({ summary: "Get player" })
   @ApiParam({ name: "id", required: true })
+  @ApiOkResponse({
+    description: "Get a player by id.",
+    type: PlayerDto
+  })
   async getPlayer(@Param("id") id: string) {
     const player = await this.nbaService.getPlayer(id);
     if (!player) {
@@ -246,6 +390,10 @@ export class NbaController {
   @ApiQuery({ name: "teamId", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List team game stats with pagination.",
+    type: PaginatedTeamGameStatDto
+  })
   async listTeamStats(
     @Query("gameId") gameId?: string,
     @Query("teamId") teamId?: string,
@@ -266,6 +414,10 @@ export class NbaController {
   @ApiQuery({ name: "teamId", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List team game stats with pagination (alias of team-stats).",
+    type: PaginatedTeamGameStatDto
+  })
   async listTeamGameStat(
     @Query("gameId") gameId?: string,
     @Query("teamId") teamId?: string,
@@ -287,6 +439,10 @@ export class NbaController {
   @ApiQuery({ name: "teamId", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List player stats with pagination.",
+    type: PaginatedPlayerGameStatDto
+  })
   async listPlayerStats(
     @Query("gameId") gameId?: string,
     @Query("playerId") playerId?: string,
@@ -311,6 +467,10 @@ export class NbaController {
   @ApiQuery({ name: "autoSync", required: false, description: "true|false" })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List player game stats with pagination (supports autoSync).",
+    type: PaginatedPlayerGameStatDto
+  })
   async listPlayerGameStat(
     @Query("gameId") gameId?: string,
     @Query("playerId") playerId?: string,
@@ -336,6 +496,10 @@ export class NbaController {
   @ApiQuery({ name: "season", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List data conflicts with pagination.",
+    type: PaginatedDataConflictDto
+  })
   async listConflicts(
     @Query("conflictType") conflictType?: string,
     @Query("playerId") playerId?: string,
@@ -362,6 +526,10 @@ export class NbaController {
   @ApiQuery({ name: "status", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "Latest injury report with paginated entries.",
+    type: InjuryReportEntriesResponseDto
+  })
   async listLatestInjuryReport(
     @Query("reportId") reportId?: string,
     @Query("date") date?: string,
@@ -391,6 +559,10 @@ export class NbaController {
   @ApiQuery({ name: "to", required: false, description: "YYYY-MM-DD" })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List injury reports with pagination.",
+    type: PaginatedInjuryReportDto
+  })
   async listInjuryReports(
     @Query("date") date?: string,
     @Query("from") from?: string,
@@ -417,6 +589,10 @@ export class NbaController {
   @ApiQuery({ name: "status", required: false })
   @ApiQuery({ name: "page", required: false })
   @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "Injury report entries with the resolved report metadata.",
+    type: InjuryReportEntriesResponseDto
+  })
   async listInjuryReportEntries(
     @Query("reportId") reportId?: string,
     @Query("date") date?: string,
@@ -484,5 +660,51 @@ export class NbaController {
       throw new BadRequestException("date must be YYYY-MM-DD");
     }
     return parsed;
+  }
+
+  private stripContextFields<T>(value: T): T {
+    const shouldOmit = (key: string) => {
+      const normalized = key.toLowerCase();
+      if (normalized === "id") {
+        return true;
+      }
+      if (normalized.endsWith("id") || normalized.endsWith("_id")) {
+        return true;
+      }
+      if (
+        normalized === "createdat" ||
+        normalized === "updatedat" ||
+        normalized === "created_at" ||
+        normalized === "updated_at"
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    const visit = (input: any): any => {
+      if (input === null || input === undefined) {
+        return input;
+      }
+      if (input instanceof Date) {
+        return input;
+      }
+      if (Array.isArray(input)) {
+        return input.map(visit);
+      }
+      if (typeof input === "object") {
+        const result: Record<string, any> = {};
+        for (const [key, val] of Object.entries(input)) {
+          if (shouldOmit(key)) {
+            continue;
+          }
+          result[key] = visit(val);
+        }
+        return result;
+      }
+      return input;
+    };
+
+    return visit(value);
   }
 }
