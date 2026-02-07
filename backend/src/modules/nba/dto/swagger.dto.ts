@@ -524,12 +524,6 @@ export class GameAnalysisRequestDto {
   @ApiProperty({ example: "9d6d84d0-9ac7-4a21-9b6a-1c2f4b9b3f6e" })
   gameId!: string;
 
-  @ApiProperty({ example: "gpt-4o-mini", required: false })
-  model?: string;
-
-  @ApiProperty({ example: 0.2, required: false })
-  temperature?: number;
-
   @ApiProperty({ example: 5, required: false })
   matchupLimit?: number;
 

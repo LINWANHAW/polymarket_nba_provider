@@ -271,9 +271,7 @@ export function X402Client() {
 
   const [analysisState, setAnalysisState] = useState<PaidState>(emptyPaidState);
   const [analysisForm, setAnalysisForm] = useState({
-    gameId: "",
-    model: "",
-    temperature: "0.2"
+    gameId: ""
   });
   const [autoGameLabel, setAutoGameLabel] = useState<string | null>(null);
 
@@ -337,16 +335,10 @@ export function X402Client() {
       });
       return;
     }
-    const temperatureValue = Number(analysisForm.temperature);
     const payload: Record<string, any> = {
       gameId: analysisForm.gameId.trim()
     };
-    if (analysisForm.model.trim()) {
-      payload.model = analysisForm.model.trim();
-    }
-    if (Number.isFinite(temperatureValue)) {
-      payload.temperature = temperatureValue;
-    }
+    // Temperature/model are server-controlled; do not send from client.
     await handlePaidRequest(
       { endpoint: analysisEndpoint, method: "POST", body: payload },
       setAnalysisState
@@ -466,33 +458,6 @@ export function X402Client() {
         {autoGameLabel ? (
           <div className="hint">Auto-selected today first game: {autoGameLabel}</div>
         ) : null}
-        <label className="field">
-          <span>Model (optional)</span>
-          <input
-            type="text"
-            placeholder="gpt-4o-mini"
-            value={analysisForm.model}
-            onChange={(event) =>
-              setAnalysisForm((prev) => ({ ...prev, model: event.target.value }))
-            }
-          />
-        </label>
-        <label className="field">
-          <span>Temperature</span>
-          <input
-            type="number"
-            step="0.1"
-            min="0"
-            max="1"
-            value={analysisForm.temperature}
-            onChange={(event) =>
-              setAnalysisForm((prev) => ({
-                ...prev,
-                temperature: event.target.value
-              }))
-            }
-          />
-        </label>
         <button
           onClick={handleAnalysisRequest}
           disabled={

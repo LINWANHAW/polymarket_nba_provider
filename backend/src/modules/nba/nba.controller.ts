@@ -320,9 +320,6 @@ export class NbaController {
     }
 
     const result = await this.nbaService.analyzeGame(body.gameId, {
-      model: body.model,
-      temperature:
-        body.temperature !== undefined ? Number(body.temperature) : undefined,
       matchupLimit:
         body.matchupLimit !== undefined ? Number(body.matchupLimit) : undefined,
       recentLimit:
