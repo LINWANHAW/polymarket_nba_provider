@@ -17,8 +17,17 @@ import { decodePaymentRequiredHeader } from "@x402/core/http";
 import type { PaymentRequired } from "@x402/core/types";
 import { erc20Abi, formatUnits } from "viem";
 
-const apiBase =
-  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:3000";
+const resolveApiBase = () => {
+  if (process.env.NEXT_PUBLIC_API_BASE) {
+    return process.env.NEXT_PUBLIC_API_BASE;
+  }
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:3000`;
+  }
+  return "http://localhost:3000";
+};
+const apiBase = resolveApiBase();
 const analysisEndpoint = `${apiBase}/nba/analysis`;
 const usdcTokenAddress = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
 const usdcDecimals = 6;

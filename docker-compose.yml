@@ -54,7 +54,6 @@ services:
       context: ./frontend
     container_name: polymarket_nba_frontend
     environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:3000
       INTERNAL_API_BASE: http://backend:3000
       NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ""
     ports:
