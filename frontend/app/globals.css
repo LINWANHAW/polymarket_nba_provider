@@ -361,6 +361,57 @@ textarea.codearea {
   background: #fff7ec;
 }
 
+.receipt-panel {
+  grid-column: 1 / -1;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 250, 244, 0.95)),
+    repeating-linear-gradient(
+      0deg,
+      rgba(217, 119, 63, 0.06) 0,
+      rgba(217, 119, 63, 0.06) 1px,
+      transparent 1px,
+      transparent 26px
+    );
+}
+
+.receipt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.receipt-table-wrap {
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px dashed rgba(28, 26, 23, 0.2);
+  background: #fffcf8;
+}
+
+.receipt-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 840px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 0.82rem;
+}
+
+.receipt-table th,
+.receipt-table td {
+  padding: 10px 12px;
+  border-bottom: 1px dashed #e8ddcf;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.receipt-table th {
+  background: rgba(217, 119, 63, 0.12);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .console {
   padding: 18px;
 }

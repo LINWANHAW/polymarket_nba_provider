@@ -44,6 +44,7 @@ async function bootstrap() {
         "Authorization",
         "PAYMENT-SIGNATURE",
         "X-PAYMENT",
+        "X-CHAIN-ID",
         "Access-Control-Expose-Headers"
       ],
       exposedHeaders: [

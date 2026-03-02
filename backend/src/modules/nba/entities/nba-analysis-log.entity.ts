@@ -14,6 +14,12 @@ export class NbaAnalysisLog {
   @Column({ name: "session_id", type: "text", nullable: true })
   sessionId!: string | null;
 
+  @Column({ name: "tx_hash", type: "text", nullable: true })
+  txHash!: string | null;
+
+  @Column({ name: "chain_id", type: "integer", nullable: true })
+  chainId!: number | null;
+
   @Column({ name: "request_params", type: "jsonb" })
   requestParams!: Record<string, any>;
 
@@ -29,4 +35,3 @@ export class NbaAnalysisLog {
   @Column({ name: "updated_at", type: "timestamptz", default: () => "now()" })
   updatedAt!: Date;
 }
-

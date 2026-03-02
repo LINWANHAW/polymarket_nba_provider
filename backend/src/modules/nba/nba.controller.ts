@@ -30,6 +30,7 @@ import {
   GameDto,
   GameMarketsResponseDto,
   InjuryReportEntriesResponseDto,
+  PaginatedNbaAnalysisLogDto,
   PaginatedDataConflictDto,
   PaginatedGameDto,
   PaginatedInjuryReportDto,
@@ -40,6 +41,9 @@ import {
   SyncJobResponseDto,
   TeamDto
 } from "./dto/swagger.dto";
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { decodePaymentResponseHeader } = require("@x402/core/http");
 
 @Controller("nba")
 @ApiTags("NBA")
@@ -332,18 +336,17 @@ export class NbaController {
     type: GameAnalysisResponseDto
   })
   async analyzeGame(@Req() req: Request, @Body() body: GameAnalysisRequestDto) {
-    if (!body?.date) {
-      throw new BadRequestException("date is required, YYYY-MM-DD");
-    }
-    if (!body?.home || !body?.away) {
-      throw new BadRequestException("home and away are required");
-    }
-
-    this.parseDate(body.date);
+    this.validateAnalysisBody(body);
 
     const x402 = (req as any).x402 as
-      | { sessionId?: string; payerAddress?: string | null }
+      | {
+          sessionId?: string;
+          payerAddress?: string | null;
+          txHash?: string | null;
+          chainId?: number | null;
+        }
       | undefined;
+    const chainId = this.resolveChainIdFromRequest(req, x402?.chainId ?? null);
     const requestParams = {
       date: body.date,
       home: body.home,
@@ -355,9 +358,31 @@ export class NbaController {
     };
 
     let recorded = false;
+    let analysisLogId: string | null = null;
+    const response = req.res;
+    let txHashBackfillRegistered = false;
+    const registerTxHashBackfill = () => {
+      if (!response || txHashBackfillRegistered) {
+        return;
+      }
+      txHashBackfillRegistered = true;
+      response.on("finish", () => {
+        if (!analysisLogId) {
+          return;
+        }
+        const txHash = this.extractTxHashFromResponse(response);
+        if (!txHash) {
+          return;
+        }
+        void this.nbaService.updateAnalysisLogTxHash(analysisLogId, txHash);
+      });
+    };
+
     const recordOnce = async (payload: {
       payerAddress?: string | null;
       sessionId?: string | null;
+      txHash?: string | null;
+      chainId?: number | null;
       requestParams: Record<string, any>;
       response?: Record<string, any> | null;
       error?: string | null;
@@ -366,30 +391,19 @@ export class NbaController {
         return;
       }
       recorded = true;
-      await this.nbaService.recordAnalysisLog(payload);
+      analysisLogId = await this.nbaService.recordAnalysisLog(payload);
+      registerTxHashBackfill();
     };
 
     try {
-      const result = await this.nbaService.analyzeGameByMatchup(
-        {
-          date: body.date,
-          home: body.home,
-          away: body.away
-        },
-        {
-          matchupLimit:
-            body.matchupLimit !== undefined
-              ? Number(body.matchupLimit)
-              : undefined,
-          recentLimit:
-            body.recentLimit !== undefined ? Number(body.recentLimit) : undefined
-        }
-      );
+      const result = await this.runAnalysis(body);
 
       if (!result) {
         await recordOnce({
           payerAddress: x402?.payerAddress ?? null,
           sessionId: x402?.sessionId ?? null,
+          txHash: x402?.txHash ?? null,
+          chainId,
           requestParams,
           response: null,
           error: "game_not_found"
@@ -400,6 +414,8 @@ export class NbaController {
       await recordOnce({
         payerAddress: x402?.payerAddress ?? null,
         sessionId: x402?.sessionId ?? null,
+        txHash: x402?.txHash ?? null,
+        chainId,
         requestParams,
         response: result as any,
         error: null
@@ -411,6 +427,8 @@ export class NbaController {
       await recordOnce({
         payerAddress: x402?.payerAddress ?? null,
         sessionId: x402?.sessionId ?? null,
+        txHash: x402?.txHash ?? null,
+        chainId,
         requestParams,
         response: null,
         error:
@@ -418,6 +436,53 @@ export class NbaController {
       });
       throw err;
     }
+  }
+
+  @Post("analysis/free")
+  @ApiOperation({ summary: "AI analysis for a matchup (no x402)" })
+  @ApiBody({ type: GameAnalysisRequestDto })
+  @ApiOkResponse({
+    description: "AI analysis result with win probabilities.",
+    type: GameAnalysisResponseDto
+  })
+  async analyzeGameFree(@Body() body: GameAnalysisRequestDto) {
+    const result = await this.runAnalysis(body);
+    if (!result) {
+      throw new NotFoundException("game not found");
+    }
+    return result;
+  }
+
+  @Get("analysis-log")
+  @ApiOperation({
+    summary: "List AI analysis purchase logs (filter by payer wallet/session)"
+  })
+  @ApiQuery({ name: "payerAddress", required: false })
+  @ApiQuery({ name: "sessionId", required: false })
+  @ApiQuery({ name: "page", required: false })
+  @ApiQuery({ name: "pageSize", required: false })
+  @ApiOkResponse({
+    description: "List AI analysis logs with pagination.",
+    type: PaginatedNbaAnalysisLogDto
+  })
+  async listAnalysisLogs(
+    @Query("payerAddress") payerAddress?: string,
+    @Query("sessionId") sessionId?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string
+  ) {
+    const normalizedPayerAddress = payerAddress?.trim();
+    const normalizedSessionId = sessionId?.trim();
+    if (!normalizedPayerAddress && !normalizedSessionId) {
+      throw new BadRequestException("payerAddress or sessionId is required");
+    }
+
+    return this.nbaService.listAnalysisLogs({
+      payerAddress: normalizedPayerAddress,
+      sessionId: normalizedSessionId,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined
+    });
   }
 
   @Get("players")
@@ -712,6 +777,54 @@ export class NbaController {
     return undefined;
   }
 
+  private resolveChainIdFromRequest(
+    req: Request,
+    fallback?: number | null
+  ): number | null {
+    const rawHeader = req.headers["x-chain-id"];
+    const headerValue = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+    if (typeof headerValue === "string" && headerValue.trim()) {
+      const parsed = Number(headerValue.trim());
+      if (Number.isInteger(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+    if (
+      typeof fallback === "number" &&
+      Number.isInteger(fallback) &&
+      fallback > 0
+    ) {
+      return fallback;
+    }
+    return null;
+  }
+
+  private extractTxHashFromResponse(response: Request["res"]) {
+    if (!response) {
+      return null;
+    }
+    const rawHeader =
+      response.getHeader("PAYMENT-RESPONSE") ??
+      response.getHeader("X-PAYMENT-RESPONSE");
+    const paymentResponseHeader = Array.isArray(rawHeader)
+      ? rawHeader.find((entry) => typeof entry === "string")
+      : rawHeader;
+    if (typeof paymentResponseHeader !== "string") {
+      return null;
+    }
+    try {
+      const decoded = decodePaymentResponseHeader(paymentResponseHeader) as
+        | { transaction?: string | null }
+        | null;
+      return typeof decoded?.transaction === "string" &&
+        decoded.transaction.trim()
+        ? decoded.transaction.trim()
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async enqueueManualSync(name: string, data: Record<string, any>) {
     const redis = await this.queue.client;
     const cooldownKey = `manual-sync:cooldown:${name}`;
@@ -764,6 +877,33 @@ export class NbaController {
       throw new BadRequestException("date must be YYYY-MM-DD");
     }
     return parsed;
+  }
+
+  private validateAnalysisBody(body: GameAnalysisRequestDto) {
+    if (!body?.date) {
+      throw new BadRequestException("date is required, YYYY-MM-DD");
+    }
+    if (!body?.home || !body?.away) {
+      throw new BadRequestException("home and away are required");
+    }
+    this.parseDate(body.date);
+  }
+
+  private runAnalysis(body: GameAnalysisRequestDto) {
+    this.validateAnalysisBody(body);
+    return this.nbaService.analyzeGameByMatchup(
+      {
+        date: body.date,
+        home: body.home,
+        away: body.away
+      },
+      {
+        matchupLimit:
+          body.matchupLimit !== undefined ? Number(body.matchupLimit) : undefined,
+        recentLimit:
+          body.recentLimit !== undefined ? Number(body.recentLimit) : undefined
+      }
+    );
   }
 
   private stripContextFields<T>(value: T): T {

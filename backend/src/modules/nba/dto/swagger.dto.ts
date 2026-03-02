@@ -588,6 +588,62 @@ export class GameAnalysisResponseDto {
   raw?: string;
 }
 
+export class NbaAnalysisLogDto {
+  @ApiProperty({ example: "5a9b7c1d-1f2e-4b3a-9d8c-7e6f5a4b3c2d" })
+  id!: string;
+
+  @ApiProperty({
+    example: "0x6b175474e89094c44da98b954eedeac495271d0f",
+    nullable: true
+  })
+  payerAddress!: string | null;
+
+  @ApiProperty({ example: "x402-session-abc123", nullable: true })
+  sessionId!: string | null;
+
+  @ApiProperty({
+    example:
+      "0x1f4cbf0e2e5478d9e1f84be7f7f8279c2b8d2474d7c84b3e2f3dcac203d7dd8a",
+    nullable: true
+  })
+  txHash!: string | null;
+
+  @ApiProperty({ example: 84532, nullable: true })
+  chainId!: number | null;
+
+  @ApiProperty({ example: { date: "2026-02-07", home: "SAS", away: "DAL" } })
+  requestParams!: Record<string, any>;
+
+  @ApiProperty({
+    nullable: true,
+    example: { homeWinPct: 54.3, awayWinPct: 45.7, confidence: 62.5 }
+  })
+  response!: Record<string, any> | null;
+
+  @ApiProperty({ example: null, nullable: true })
+  error!: string | null;
+
+  @ApiProperty({ example: "2026-02-06T12:34:56.000Z" })
+  createdAt!: Date;
+
+  @ApiProperty({ example: "2026-02-06T12:35:01.000Z" })
+  updatedAt!: Date;
+}
+
+export class PaginatedNbaAnalysisLogDto {
+  @ApiProperty({ type: [NbaAnalysisLogDto] })
+  data!: NbaAnalysisLogDto[];
+
+  @ApiProperty({ example: 1 })
+  page!: number;
+
+  @ApiProperty({ example: 20 })
+  pageSize!: number;
+
+  @ApiProperty({ example: 12 })
+  total!: number;
+}
+
 export class TeamListResponseDto {
   @ApiProperty({ type: [TeamDto] })
   data!: TeamDto[];

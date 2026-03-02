@@ -1070,23 +1070,77 @@ export class NbaService {
     return this.runAnalysis(context, options);
   }
 
+  async listAnalysisLogs(filters: {
+    payerAddress?: string;
+    sessionId?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<PaginationResult<NbaAnalysisLog>> {
+    const page = this.clampPage(filters.page);
+    const pageSize = this.clampPageSize(filters.pageSize);
+    const qb = this.nbaAnalysisLogRepo.createQueryBuilder("log");
+    qb.where("1=1");
+
+    if (filters.payerAddress) {
+      qb.andWhere("LOWER(log.payer_address) = :payerAddress", {
+        payerAddress: filters.payerAddress.toLowerCase()
+      });
+    }
+
+    if (filters.sessionId) {
+      qb.andWhere("log.session_id = :sessionId", {
+        sessionId: filters.sessionId
+      });
+    }
+
+    qb.orderBy("log.createdAt", "DESC");
+    return this.paginate(qb, page, pageSize);
+  }
+
   async recordAnalysisLog(input: {
     payerAddress?: string | null;
     sessionId?: string | null;
+    txHash?: string | null;
+    chainId?: number | null;
     requestParams: Record<string, any>;
     response?: Record<string, any> | null;
     error?: string | null;
   }) {
     try {
-      await this.nbaAnalysisLogRepo.insert({
+      const inserted = await this.nbaAnalysisLogRepo.insert({
         payerAddress: input.payerAddress ?? null,
         sessionId: input.sessionId ?? null,
+        txHash: input.txHash ?? null,
+        chainId:
+          typeof input.chainId === "number" && Number.isFinite(input.chainId)
+            ? input.chainId
+            : null,
         requestParams: input.requestParams,
         response: input.response ?? null,
         error: input.error ?? null
       });
+      const insertedId = inserted.identifiers?.[0]?.id;
+      return typeof insertedId === "string" ? insertedId : null;
     } catch {
       // Best-effort audit log only; never block API response.
+      return null;
+    }
+  }
+
+  async updateAnalysisLogTxHash(logId: string, txHash: string) {
+    try {
+      await this.nbaAnalysisLogRepo
+        .createQueryBuilder()
+        .update(NbaAnalysisLog)
+        .set({
+          txHash,
+          updatedAt: new Date()
+        })
+        .where("id = :id", { id: logId })
+        .andWhere("(tx_hash IS NULL OR tx_hash = '')")
+        .execute();
+    } catch {
+      // Best-effort audit enrichment only; never block API response.
     }
   }
 
@@ -3492,7 +3546,9 @@ export class NbaService {
     }
     const apiKey = this.configService.get<string>("OPENAI_API_KEY");
     if (!apiKey) {
-      throw new Error("OPENAI_API_KEY is required to use /nba/analysis.");
+      throw new Error(
+        "OPENAI_API_KEY is required to use /nba/analysis or /nba/analysis/free."
+      );
     }
     const { default: OpenAI } = await import("openai");
     this.openaiClient = new OpenAI({ apiKey });
