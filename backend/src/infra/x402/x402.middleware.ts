@@ -31,6 +31,13 @@ type ProtectedRoute = {
   price: string;
   description: string;
   mimeType?: string;
+  bazaar?: {
+    input: Record<string, unknown>;
+    inputSchema: Record<string, unknown>;
+    bodyType?: "json" | "form-data" | "text";
+    outputExample?: Record<string, unknown>;
+    outputSchema?: Record<string, unknown>;
+  };
 };
 
 function buildRouteKey(method: string, path: string) {
@@ -52,6 +59,17 @@ const {
   decodePaymentResponseHeader,
   decodePaymentSignatureHeader,
 } = require("@x402/core/http");
+let declareDiscoveryExtension: ((config: Record<string, unknown>) => Record<string, unknown>) | null = null;
+let bazaarResourceServerExtension: unknown = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const bazaar = require("@x402/extensions/bazaar");
+  declareDiscoveryExtension = bazaar?.declareDiscoveryExtension ?? null;
+  bazaarResourceServerExtension = bazaar?.bazaarResourceServerExtension ?? null;
+} catch {
+  declareDiscoveryExtension = null;
+  bazaarResourceServerExtension = null;
+}
 
 function extractPayerAddressFromPaymentPayload(
   paymentPayload: any
@@ -173,6 +191,15 @@ export function createX402Middleware(): RequestHandler | null {
   if (!enabled) {
     return null;
   }
+  const bazaarEnabled = process.env.X402_BAZAAR_ENABLED !== "false";
+  if (
+    bazaarEnabled &&
+    (!declareDiscoveryExtension || !bazaarResourceServerExtension)
+  ) {
+    console.warn(
+      "[x402] bazaar enabled but @x402/extensions/bazaar is unavailable; discovery extension disabled."
+    );
+  }
 
   const oneTimePrice = process.env.X402_PRICE || "$0.001";
   const analysisPrice = process.env.X402_ANALYSIS_PRICE || oneTimePrice;
@@ -189,6 +216,31 @@ export function createX402Middleware(): RequestHandler | null {
       price: analysisPrice,
       description: analysisDescription,
       mimeType: "application/json",
+      bazaar: {
+        bodyType: "json",
+        input: {
+          date: "2026-03-10",
+          home: "LAC",
+          away: "NYK"
+        },
+        inputSchema: {
+          type: "object",
+          properties: {
+            date: { type: "string", description: "Game date (YYYY-MM-DD)" },
+            home: { type: "string", description: "Home team abbreviation" },
+            away: { type: "string", description: "Away team abbreviation" }
+          },
+          required: ["date", "home", "away"]
+        },
+        outputExample: {
+          gameId: "0022500999",
+          homeTeam: "LAC",
+          awayTeam: "NYK",
+          confidence: 63.5,
+          analysis: "Short-form matchup analysis text.",
+          model: "gpt-4o-mini"
+        }
+      }
     },
     {
       method: "POST",
@@ -317,19 +369,47 @@ export function createX402Middleware(): RequestHandler | null {
           }
         );
       }
-      const server = new x402ResourceServer(facilitator).register(
+      const server: any = new x402ResourceServer(facilitator).register(
         network,
         scheme,
       );
+      if (
+        bazaarEnabled &&
+        bazaarResourceServerExtension &&
+        typeof server.registerExtension === "function"
+      ) {
+        server.registerExtension(bazaarResourceServerExtension);
+      }
       const routes = Object.fromEntries(
-        protectedRoutes.map((route) => [
-          buildRouteKey(route.method, route.path),
-          {
+        protectedRoutes.map((route) => {
+          const routeConfig: Record<string, unknown> = {
             accepts: [{ scheme: "exact", network, price: route.price, payTo }],
             description: route.description,
             mimeType: route.mimeType ?? "application/json",
-          },
-        ])
+          };
+          if (
+            bazaarEnabled &&
+            route.bazaar &&
+            typeof declareDiscoveryExtension === "function"
+          ) {
+            const output =
+              route.bazaar.outputExample || route.bazaar.outputSchema
+                ? {
+                    example: route.bazaar.outputExample,
+                    schema: route.bazaar.outputSchema
+                  }
+                : undefined;
+            routeConfig.extensions = {
+              ...declareDiscoveryExtension({
+                input: route.bazaar.input,
+                inputSchema: route.bazaar.inputSchema,
+                bodyType: route.bazaar.bodyType ?? "json",
+                output
+              })
+            };
+          }
+          return [buildRouteKey(route.method, route.path), routeConfig];
+        })
       );
       return paymentMiddleware(routes, server);
     } catch (err: any) {

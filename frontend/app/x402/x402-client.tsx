@@ -31,6 +31,7 @@ const apiBase = resolveApiBase();
 const analysisEndpoint = `${apiBase}/nba/analysis`;
 const analysisFreeEndpoint = `${apiBase}/nba/analysis/free`;
 const analysisLogEndpoint = `${apiBase}/nba/analysis-log`;
+const bazaarResourcesEndpoint = `${apiBase}/x402/bazaar/resources`;
 const usdcTokenByChainId = {
   [baseSepolia.id]: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   [polygon.id]: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
@@ -104,6 +105,26 @@ type AnalysisLogState = {
   error: string | null;
 };
 
+type BazaarResourceItem = {
+  resource?: string;
+  type?: string;
+  x402Version?: number;
+  accepts?: Array<{
+    network?: string;
+    amount?: string;
+    asset?: string;
+  }>;
+  lastUpdated?: number;
+  metadata?: Record<string, any>;
+};
+
+type BazaarState = {
+  status: PaidStatus;
+  items: BazaarResourceItem[];
+  total: number;
+  error: string | null;
+};
+
 const emptyPaidState: PaidState = {
   status: "idle",
   result: null,
@@ -121,6 +142,13 @@ const emptyAnalysisLogState: AnalysisLogState = {
   data: [],
   page: 1,
   pageSize: 20,
+  total: 0,
+  error: null
+};
+
+const emptyBazaarState: BazaarState = {
+  status: "idle",
+  items: [],
   total: 0,
   error: null
 };
@@ -175,6 +203,13 @@ function formatConfidence(value: unknown) {
     return String(value);
   }
   return `${numeric.toFixed(1)}%`;
+}
+
+function formatUnixSeconds(value: number | undefined) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  return formatTimestamp(new Date((value as number) * 1000).toISOString());
 }
 
 async function performPaidRequest(
@@ -483,11 +518,14 @@ export function X402Client() {
   const [analysisLogState, setAnalysisLogState] = useState<AnalysisLogState>(
     emptyAnalysisLogState
   );
+  const [bazaarState, setBazaarState] = useState<BazaarState>(emptyBazaarState);
   const [analysisForm, setAnalysisForm] = useState({
     date: "",
     home: "",
     away: ""
   });
+  const [bazaarQuery, setBazaarQuery] = useState("nba");
+  const [bazaarNetwork, setBazaarNetwork] = useState<string>("eip155:137");
   const [analysisRequestMode, setAnalysisRequestMode] = useState<"paid" | "free">(
     "paid"
   );
@@ -634,6 +672,58 @@ export function X402Client() {
       await loadAnalysisLog();
     }
   };
+
+  const loadBazaarResources = useCallback(async () => {
+    setBazaarState((prev) => ({
+      ...prev,
+      status: "loading",
+      error: null
+    }));
+    try {
+      const params = new URLSearchParams({
+        limit: "20",
+        offset: "0"
+      });
+      if (bazaarQuery.trim()) {
+        params.set("query", bazaarQuery.trim());
+      }
+      if (bazaarNetwork.trim()) {
+        params.set("network", bazaarNetwork.trim());
+      }
+      const response = await fetch(`${bazaarResourcesEndpoint}?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+        credentials: "include"
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message =
+          payload?.upstream?.error ||
+          payload?.error ||
+          payload?.message ||
+          `HTTP ${response.status}`;
+        throw new Error(message);
+      }
+      const items = Array.isArray(payload?.items)
+        ? (payload.items as BazaarResourceItem[])
+        : [];
+      const total =
+        typeof payload?.pagination?.total === "number"
+          ? payload.pagination.total
+          : items.length;
+      setBazaarState({
+        status: "success",
+        items,
+        total,
+        error: null
+      });
+    } catch (err) {
+      setBazaarState({
+        ...emptyBazaarState,
+        status: "error",
+        error: err instanceof Error ? err.message : "Failed to load Bazaar resources"
+      });
+    }
+  }, [bazaarNetwork, bazaarQuery]);
 
   const buildAnalysisPayload = () => {
     if (!analysisForm.date.trim()) {
@@ -807,6 +897,13 @@ export function X402Client() {
     void loadAnalysisLog();
   }, [loadAnalysisLog]);
 
+  useEffect(() => {
+    if (typeof currentChainId !== "number") {
+      return;
+    }
+    setBazaarNetwork(`eip155:${currentChainId}`);
+  }, [currentChainId]);
+
   return (
     <div className="x402-body">
       <div className="x402-panel">
@@ -860,6 +957,78 @@ export function X402Client() {
           <div className="hint">
             Please ensure the MetaMask browser extension is installed.
           </div>
+        ) : null}
+      </div>
+
+      <div className="x402-panel">
+        <div className="card-title">Bazaar Discovery</div>
+        <div className="hint">Endpoint: {bazaarResourcesEndpoint}</div>
+        <div className="form-row">
+          <label className="field">
+            <span>Query</span>
+            <input
+              type="text"
+              placeholder="nba analysis"
+              value={bazaarQuery}
+              onChange={(event) => setBazaarQuery(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Network</span>
+            <select
+              value={bazaarNetwork}
+              onChange={(event) => setBazaarNetwork(event.target.value)}
+            >
+              <option value="">Any</option>
+              <option value={`eip155:${baseSepolia.id}`}>Base Sepolia</option>
+              <option value={`eip155:${polygon.id}`}>Polygon</option>
+            </select>
+          </label>
+        </div>
+        <div className="form-row">
+          <button
+            className="ghost"
+            onClick={() => void loadBazaarResources()}
+            disabled={bazaarState.status === "loading"}
+          >
+            Search Bazaar
+          </button>
+        </div>
+        {bazaarState.status === "loading" ? (
+          <div className="hint">Loading Bazaar resources...</div>
+        ) : null}
+        {bazaarState.status === "error" ? (
+          <div className="error">{bazaarState.error}</div>
+        ) : null}
+        {bazaarState.items.length > 0 ? (
+          <div className="log">
+            {bazaarState.items.map((item, index) => {
+              const firstAccept = item.accepts?.[0];
+              return (
+                <div className="log-row" key={`${item.resource ?? "resource"}-${index}`}>
+                  <div className="log-meta">
+                    <div className="pill">
+                      {item.type ?? "resource"} / v{item.x402Version ?? "?"}
+                    </div>
+                    <div className="hint">
+                      Updated: {formatUnixSeconds(item.lastUpdated)}
+                    </div>
+                  </div>
+                  <div className="hint">Resource: {item.resource ?? "-"}</div>
+                  <div className="hint">
+                    Network: {firstAccept?.network ?? "-"} | Amount:{" "}
+                    {firstAccept?.amount ?? "-"} | Asset: {firstAccept?.asset ?? "-"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+        {bazaarState.status === "success" && bazaarState.items.length === 0 ? (
+          <div className="empty">No Bazaar resources found for current filters.</div>
+        ) : null}
+        {bazaarState.total > 0 ? (
+          <div className="hint">Total discovered: {bazaarState.total}</div>
         ) : null}
       </div>
 
