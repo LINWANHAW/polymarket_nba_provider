@@ -11,10 +11,39 @@ import { ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
 @Controller("x402")
 @ApiTags("x402")
 export class X402Controller {
-  private resolveBazaarBaseUrl(): string {
-    const configured =
-      process.env.X402_BAZAAR_SERVICE_URL || "https://api-hoobs.polyox.io";
-    return configured.replace(/\/+$/, "");
+  private parseChainIdFromNetwork(value?: string): number | null {
+    if (!value || typeof value !== "string") {
+      return null;
+    }
+    const match = value.trim().match(/^eip155:(\d+)$/);
+    if (!match) {
+      return null;
+    }
+    const parsed = Number(match[1]);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private resolveBazaarBaseUrl(network?: string): string {
+    const explicit = process.env.X402_BAZAAR_SERVICE_URL?.trim();
+    if (explicit) {
+      return explicit.replace(/\/+$/, "");
+    }
+    const chainId = this.parseChainIdFromNetwork(network);
+    if (chainId === 137) {
+      return (
+        process.env.X402_POLYGON_BAZAAR_SERVICE_URL ||
+        process.env.X402_POLYGON_FACILITATOR_URL ||
+        "https://facilitator.x402.fi"
+      ).replace(/\/+$/, "");
+    }
+    return (
+      process.env.X402_BASE_BAZAAR_SERVICE_URL ||
+      process.env.X402_CDP_DISCOVERY_URL ||
+      "https://api.cdp.coinbase.com/platform/v2/x402"
+    ).replace(/\/+$/, "");
   }
 
   private parsePositiveInt(value: unknown, fallback: number): number {
@@ -34,8 +63,8 @@ export class X402Controller {
     }
   }
 
-  private async requestBazaar(pathWithQuery: string) {
-    const bazaarBaseUrl = this.resolveBazaarBaseUrl();
+  private async requestBazaar(pathWithQuery: string, network?: string) {
+    const bazaarBaseUrl = this.resolveBazaarBaseUrl(network);
     const response = await fetch(`${bazaarBaseUrl}${pathWithQuery}`, {
       headers: {
         Accept: "application/json",
@@ -109,7 +138,7 @@ export class X402Controller {
     this.appendIfString(params, "network", network);
     this.appendIfString(params, "type", type);
 
-    return this.requestBazaar(`/discovery/resources?${params.toString()}`);
+    return this.requestBazaar(`/discovery/resources?${params.toString()}`, network);
   }
 
   @Get("bazaar/resources/:resourceId")
@@ -136,6 +165,7 @@ export class X402Controller {
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.requestBazaar(
       `/discovery/resources/${encodeURIComponent(resourceId.trim())}${suffix}`,
+      network,
     );
   }
 }
