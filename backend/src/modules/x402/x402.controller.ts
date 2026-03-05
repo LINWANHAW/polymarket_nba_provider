@@ -11,6 +11,54 @@ import { ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
 @Controller("x402")
 @ApiTags("x402")
 export class X402Controller {
+  private matchesBazaarQuery(item: any, query: string): boolean {
+    const needle = query.trim().toLowerCase();
+    if (!needle) {
+      return true;
+    }
+
+    const texts: string[] = [];
+    const pushText = (value: unknown) => {
+      if (typeof value === "string" && value.trim()) {
+        texts.push(value.toLowerCase());
+      }
+    };
+
+    pushText(item?.resource);
+    pushText(item?.type);
+    pushText(item?.metadata?.provider);
+    pushText(item?.metadata?.category);
+    pushText(item?.metadata?.description);
+    pushText(item?.metadata?.method);
+    pushText(item?.metadata?.path);
+    pushText(item?.metadata?.name);
+
+    const accepts = Array.isArray(item?.accepts) ? item.accepts : [];
+    for (const accept of accepts) {
+      pushText(accept?.scheme);
+      pushText(accept?.network);
+      pushText(accept?.asset);
+      pushText(accept?.description);
+      pushText(accept?.extra?.name);
+      pushText(accept?.extra?.symbol);
+    }
+
+    return texts.some((text) => text.includes(needle));
+  }
+
+  private matchesBazaarSeller(item: any, seller: string): boolean {
+    const needle = seller.trim().toLowerCase();
+    if (!needle) {
+      return true;
+    }
+    const resource = typeof item?.resource === "string" ? item.resource : "";
+    const itemSeller = typeof item?.seller === "string" ? item.seller : "";
+    return (
+      resource.toLowerCase().includes(needle) ||
+      itemSeller.toLowerCase().includes(needle)
+    );
+  }
+
   private parseChainIdFromNetwork(value?: string): number | null {
     if (!value || typeof value !== "string") {
       return null;
@@ -138,7 +186,76 @@ export class X402Controller {
     this.appendIfString(params, "network", network);
     this.appendIfString(params, "type", type);
 
-    return this.requestBazaar(`/discovery/resources?${params.toString()}`, network);
+    const trimmedQuery = query?.trim() ?? "";
+    const trimmedSeller = seller?.trim() ?? "";
+    const shouldUseLocalFilter = Boolean(trimmedQuery || trimmedSeller);
+    if (!shouldUseLocalFilter) {
+      return this.requestBazaar(`/discovery/resources?${params.toString()}`, network);
+    }
+
+    // Some discovery endpoints currently do not apply query/seller reliably.
+    // Apply deterministic local filtering over multiple pages.
+    const scanLimitPerPage = 100;
+    const maxScan =
+      Number.parseInt(process.env.X402_BAZAAR_LOCAL_FILTER_MAX_SCAN ?? "2000", 10) ||
+      2000;
+    const maxPages = Math.max(1, Math.floor(maxScan / scanLimitPerPage));
+
+    const localFilterParams = new URLSearchParams();
+    localFilterParams.set("limit", String(scanLimitPerPage));
+    localFilterParams.set("offset", "0");
+    this.appendIfString(localFilterParams, "network", network);
+    this.appendIfString(localFilterParams, "type", type);
+
+    const collected: any[] = [];
+    let basePayload: any = null;
+    for (let page = 0; page < maxPages; page += 1) {
+      localFilterParams.set("offset", String(page * scanLimitPerPage));
+      let payload: any;
+      try {
+        payload = await this.requestBazaar(
+          `/discovery/resources?${localFilterParams.toString()}`,
+          network,
+        );
+      } catch {
+        break;
+      }
+      if (!basePayload) {
+        basePayload = payload;
+      }
+      const pageItems = Array.isArray(payload?.items) ? payload.items : [];
+      if (pageItems.length === 0) {
+        break;
+      }
+      collected.push(...pageItems);
+      if (pageItems.length < scanLimitPerPage) {
+        break;
+      }
+    }
+
+    const filteredItems = collected.filter(
+      (item: any) =>
+        this.matchesBazaarQuery(item, trimmedQuery) &&
+        this.matchesBazaarSeller(item, trimmedSeller),
+    );
+    const pagedItems = filteredItems.slice(parsedOffset, parsedOffset + parsedLimit);
+    const pagination =
+      basePayload?.pagination && typeof basePayload.pagination === "object"
+        ? basePayload.pagination
+        : {};
+
+    return {
+      ...(basePayload || {}),
+      items: pagedItems,
+      pagination: {
+        ...pagination,
+        offset: parsedOffset,
+        limit: parsedLimit,
+        total: filteredItems.length,
+        filteredByQuery: true,
+        localFilterScanCount: collected.length,
+      },
+    };
   }
 
   @Get("bazaar/resources/:resourceId")
