@@ -28,7 +28,7 @@ export class NbaEmailScheduler {
     const date =
       this.configService.get<string>("NBA_DAILY_ANALYSIS_DATE") ||
       this.formatDateInTimeZone(new Date(), tz);
-    const jobId = `daily-analysis-digest:${date}`;
+    const jobId = `daily-analysis-digest-${date}`;
     await this.queue.add(
       "send-daily-analysis-digest",
       { date, trigger: "cron" },

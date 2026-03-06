@@ -347,7 +347,7 @@ export class NbaEmailService {
         digestId: digest.id
       },
       opts: {
-        jobId: `daily-analysis-email:${digest.digestDate}:${subscription.id}`
+        jobId: `daily-analysis-email-${digest.digestDate}-${subscription.id}`
       }
     }));
 
