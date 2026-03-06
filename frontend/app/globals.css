@@ -361,6 +361,24 @@ textarea.codearea {
   background: #fff7ec;
 }
 
+.subscribe-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.subscribe-result {
+  border: 1px solid #efe6da;
+  border-radius: 12px;
+  padding: 14px;
+  background: #fff9f2;
+}
+
+.subscribe-result-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
 .receipt-panel {
   grid-column: 1 / -1;
   background:

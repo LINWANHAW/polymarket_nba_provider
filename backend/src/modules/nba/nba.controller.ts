@@ -23,7 +23,14 @@ import {
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import { NbaService } from "./nba.service";
+import { NbaEmailService } from "./nba.email.service";
 import {
+  EmailSubscriptionRequestDto,
+  EmailSubscriptionResponseDto,
+  DailyDigestEnqueueResponseDto,
+  EmailSesFeedbackResponseDto,
+  EmailUnsubscribeRequestDto,
+  EmailUnsubscribeResponseDto,
   GameAnalysisRequestDto,
   GameAnalysisResponseDto,
   GameContextResponseDto,
@@ -52,6 +59,7 @@ export class NbaController {
 
   constructor(
     private readonly nbaService: NbaService,
+    private readonly nbaEmailService: NbaEmailService,
     @InjectQueue("nba-sync") private readonly queue: Queue
   ) {}
 
@@ -168,6 +176,95 @@ export class NbaController {
     }
 
     return this.enqueueManualSync("sync-range", { from, to, mode });
+  }
+
+  @Post("subscriptions/email")
+  @ApiOperation({ summary: "Subscribe email and enqueue thank-you email" })
+  @ApiBody({ type: EmailSubscriptionRequestDto })
+  @ApiOkResponse({
+    description: "Email subscription created or already exists.",
+    type: EmailSubscriptionResponseDto
+  })
+  async subscribeEmail(
+    @Req() req: Request,
+    @Body() body: EmailSubscriptionRequestDto
+  ) {
+    return this.nbaEmailService.subscribe(body?.email, {
+      source: body?.source,
+      ip: this.resolveClientIp(req),
+      userAgent: this.resolveUserAgent(req)
+    });
+  }
+
+  @Get("subscriptions/email/unsubscribe")
+  @ApiOperation({ summary: "Unsubscribe email by token" })
+  @ApiQuery({ name: "token", required: true })
+  @ApiOkResponse({
+    description: "Email unsubscribed using secure token.",
+    type: EmailUnsubscribeResponseDto
+  })
+  async unsubscribeEmailByQuery(
+    @Query("token") token?: string,
+    @Query("source") source?: string
+  ) {
+    if (!token) {
+      throw new BadRequestException("token is required");
+    }
+    return this.nbaEmailService.unsubscribeByToken({ token, source });
+  }
+
+  @Post("subscriptions/email/unsubscribe")
+  @ApiOperation({
+    summary: "Unsubscribe email (supports one-click List-Unsubscribe POST)"
+  })
+  @ApiQuery({ name: "token", required: false })
+  @ApiBody({ type: EmailUnsubscribeRequestDto })
+  @ApiOkResponse({
+    description: "Email unsubscribed using secure token.",
+    type: EmailUnsubscribeResponseDto
+  })
+  async unsubscribeEmail(
+    @Query("token") queryToken?: string,
+    @Body() body?: EmailUnsubscribeRequestDto
+  ) {
+    const token = queryToken || body?.token;
+    if (!token) {
+      throw new BadRequestException("token is required");
+    }
+    return this.nbaEmailService.unsubscribeByToken({
+      token,
+      source: body?.source
+    });
+  }
+
+  @Post("subscriptions/email/ses-feedback")
+  @ApiOperation({
+    summary: "SES/SNS feedback webhook (bounce/complaint auto deactivation)"
+  })
+  @ApiOkResponse({
+    description: "Webhook accepted and processed.",
+    type: EmailSesFeedbackResponseDto
+  })
+  async receiveSesFeedback(@Req() req: Request, @Body() body: Record<string, any>) {
+    const rawToken = req.headers["x-email-feedback-token"];
+    const webhookToken = Array.isArray(rawToken) ? rawToken[0] : rawToken;
+    return this.nbaEmailService.handleSesFeedback(body, {
+      webhookToken:
+        typeof webhookToken === "string" ? webhookToken : undefined
+    });
+  }
+
+  @Post("subscriptions/email/daily-digest")
+  @ApiOperation({
+    summary: "Manually enqueue daily NBA analysis digest for all subscribers"
+  })
+  @ApiQuery({ name: "date", required: false, description: "YYYY-MM-DD (ET)" })
+  @ApiOkResponse({
+    description: "Daily digest generated/backed up and send jobs queued.",
+    type: DailyDigestEnqueueResponseDto
+  })
+  async enqueueDailyDigest(@Query("date") date?: string) {
+    return this.nbaEmailService.enqueueDailyDigestForSubscribers(date);
   }
 
   @Get("teams")
@@ -775,6 +872,30 @@ export class NbaController {
       return false;
     }
     return undefined;
+  }
+
+  private resolveClientIp(req: Request) {
+    const forwarded = req.headers["x-forwarded-for"];
+    const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    if (typeof forwardedValue === "string" && forwardedValue.trim()) {
+      const first = forwardedValue.split(",")[0]?.trim();
+      if (first) {
+        return first;
+      }
+    }
+    if (typeof req.ip === "string" && req.ip.trim()) {
+      return req.ip.trim();
+    }
+    return null;
+  }
+
+  private resolveUserAgent(req: Request) {
+    const raw = req.headers["user-agent"];
+    const ua = Array.isArray(raw) ? raw[0] : raw;
+    if (typeof ua === "string" && ua.trim()) {
+      return ua.trim();
+    }
+    return null;
   }
 
   private resolveChainIdFromRequest(

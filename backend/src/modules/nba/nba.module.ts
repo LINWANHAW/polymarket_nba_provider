@@ -13,8 +13,13 @@ import { DataConflict } from "./entities/data-conflict.entity";
 import { InjuryReport } from "./entities/injury-report.entity";
 import { InjuryReportEntry } from "./entities/injury-report-entry.entity";
 import { NbaAnalysisLog } from "./entities/nba-analysis-log.entity";
+import { EmailSubscription } from "./entities/email-subscription.entity";
+import { NbaDailyAnalysisDigest } from "./entities/nba-daily-analysis-digest.entity";
 import { NbaSyncProcessor } from "./nba.sync.processor";
 import { NbaSyncScheduler } from "./nba.sync.scheduler";
+import { NbaEmailService } from "./nba.email.service";
+import { NbaEmailProcessor } from "./nba.email.processor";
+import { NbaEmailScheduler } from "./nba.email.scheduler";
 import { Event } from "../polymarket/entities/event.entity";
 import { Market } from "../polymarket/entities/market.entity";
 
@@ -31,6 +36,8 @@ import { Market } from "../polymarket/entities/market.entity";
       InjuryReport,
       InjuryReportEntry,
       NbaAnalysisLog,
+      EmailSubscription,
+      NbaDailyAnalysisDigest,
       Event,
       Market
     ]),
@@ -45,9 +52,28 @@ import { Market } from "../polymarket/entities/market.entity";
         removeOnComplete: 100,
         removeOnFail: 100
       }
+    }),
+    BullModule.registerQueue({
+      name: "nba-email",
+      defaultJobOptions: {
+        attempts: 5,
+        backoff: {
+          type: "exponential",
+          delay: 30000
+        },
+        removeOnComplete: 100,
+        removeOnFail: 100
+      }
     })
   ],
-  providers: [NbaService, NbaSyncProcessor, NbaSyncScheduler],
+  providers: [
+    NbaService,
+    NbaSyncProcessor,
+    NbaSyncScheduler,
+    NbaEmailService,
+    NbaEmailProcessor,
+    NbaEmailScheduler
+  ],
   controllers: [NbaController],
   exports: [NbaService]
 })

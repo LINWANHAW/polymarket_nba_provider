@@ -103,6 +103,11 @@ NBA 查詢：
 - `GET /nba/games/:id/markets`（比賽對應 Polymarket 市場）
 - `GET /nba/games/context?date=YYYY-MM-DD&home=AAA&away=BBB`（整合比賽/球隊/球員/近期戰績/傷兵/市場）
 - `POST /nba/analysis`（AI 賽局分析，需要 x402 付費；使用 `date+home+away`）
+- `POST /nba/subscriptions/email`（email 訂閱；成功後透過 queue 發送感謝信）
+- `GET /nba/subscriptions/email/unsubscribe?token=...`（token 化退訂連結）
+- `POST /nba/subscriptions/email/unsubscribe`（支援 one-click List-Unsubscribe POST）
+- `POST /nba/subscriptions/email/ses-feedback`（SES SNS bounce/complaint webhook，自動停寄）
+- `POST /nba/subscriptions/email/daily-digest?date=YYYY-MM-DD`（手動觸發每日分析摘要寄送）
 
 Polymarket 查詢：
 - `GET /polymarket/events`、`GET /polymarket/markets`
@@ -161,6 +166,7 @@ npm run polymarket:sync
 - NBA scoreboard：`*/10 * * * *`
 - NBA final results：`*/15 * * * *`
 - NBA injury report：`30 * * * *`
+- NBA daily analysis digest：`0 0 * * *`（ET 00:00；先備份到 DB，再寄給所有訂閱者）
 - Polymarket NBA 同步：`0 * * * *`（每小時）
   - 條件 A：`active = true` 且 `end_date > now`
   - 條件 B：`start_date` 落在「今天～未來 7 天」
@@ -203,6 +209,25 @@ npm run polymarket:sync
 - `OPENAI_MODEL=gpt-4o-mini`
 - `OPENAI_TEMPERATURE=0.2`
 - `OPENAI_MAX_OUTPUT_TOKENS=700`
+
+**Email 設定（AWS SES SMTP）**
+- `EMAIL_SMTP_HOST=email-smtp.{region}.amazonaws.com`
+- `EMAIL_SMTP_PORT=587`（或 465）
+- `EMAIL_SMTP_SECURE=false`（465 時通常為 `true`）
+- `EMAIL_SMTP_USER=...`
+- `EMAIL_SMTP_PASS=...`
+- `EMAIL_FROM=...`
+- `EMAIL_WELCOME_SUBJECT=Thanks for subscribing to Polymarket NBA updates`
+- `EMAIL_UNSUBSCRIBE_BASE_URL=https://api.yourdomain.com`
+- `EMAIL_UNSUBSCRIBE_SECRET=...`（退訂 token HMAC secret）
+- `EMAIL_PRIVACY_POLICY_URL=https://yourdomain.com/privacy`
+- `EMAIL_SES_WEBHOOK_TOKEN=...`（可選，透過 header 保護 webhook）
+- `EMAIL_SES_ALLOWED_TOPIC_ARN=arn:aws:sns:...`（可選，限制可接受 Topic）
+- `NBA_DAILY_ANALYSIS_ENABLED=true`（開啟每日分析摘要）
+- `NBA_DAILY_ANALYSIS_CRON=0 0 * * *`
+- `NBA_DAILY_ANALYSIS_TZ=America/New_York`
+- `NBA_DAILY_ANALYSIS_MAX_GAMES=20`（每日分析最多場次，控成本）
+- `EMAIL_DAILY_ANALYSIS_SUBJECT_PREFIX=Polymarket NBA Daily Analysis`
 
 **x402 行為說明**
 - 以 cookie session 判斷「每個 session 一次」，成功付費後同一 session 不再要求付款。

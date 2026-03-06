@@ -181,6 +181,19 @@ export default async function Home({
         </p>
       </section>
 
+      <section>
+        <div className="section-header">
+          <h2>Email Subscription</h2>
+          <Link className="inline-link" href="/subscribe">
+            Open subscribe page
+          </Link>
+        </div>
+        <p>
+          Subscribe your email to receive a welcome message and upcoming NBA
+          update notifications.
+        </p>
+      </section>
+
       <section className="toolbar">
         <form className="date-form" method="get">
           <label className="field">

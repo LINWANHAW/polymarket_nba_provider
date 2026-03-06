@@ -23,6 +23,118 @@ export class SyncRangeResponseDto {
   jobs!: number;
 }
 
+export class EmailSubscriptionRequestDto {
+  @ApiProperty({ example: "fan@example.com" })
+  email!: string;
+
+  @ApiProperty({
+    example: "frontend_subscribe_page",
+    required: false,
+    description: "Consent source marker (form/page/campaign)."
+  })
+  source?: string;
+}
+
+export class EmailSubscriptionResponseDto {
+  @ApiProperty({ example: "b56becc9-6db8-47eb-9150-89d5e6822f8f" })
+  id!: string;
+
+  @ApiProperty({ example: "fan@example.com" })
+  email!: string;
+
+  @ApiProperty({ example: true })
+  isActive!: boolean;
+
+  @ApiProperty({ example: "2026-03-06T10:00:00.000Z" })
+  subscribedAt!: Date;
+
+  @ApiProperty({ example: "frontend_subscribe_page", nullable: true })
+  consentSource!: string | null;
+
+  @ApiProperty({ example: "203.0.113.10", nullable: true })
+  consentIp!: string | null;
+
+  @ApiProperty({
+    example:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    nullable: true
+  })
+  consentUserAgent!: string | null;
+
+  @ApiProperty({ example: false })
+  alreadySubscribed!: boolean;
+
+  @ApiProperty({ example: true })
+  welcomeEmailQueued!: boolean;
+
+  @ApiProperty({ example: "Subscription successful. Welcome email queued." })
+  message!: string;
+}
+
+export class EmailUnsubscribeRequestDto {
+  @ApiProperty({
+    example: "eyJzaWQiOiIuLi4ifQ.signature",
+    required: false,
+    description: "Unsubscribe token from email link."
+  })
+  token?: string;
+
+  @ApiProperty({
+    example: "user_unsubscribe",
+    required: false,
+    description: "Optional reason/source marker."
+  })
+  source?: string;
+}
+
+export class EmailUnsubscribeResponseDto {
+  @ApiProperty({ example: true })
+  unsubscribed!: boolean;
+
+  @ApiProperty({ example: false })
+  alreadyInactive!: boolean;
+
+  @ApiProperty({ example: "fan@example.com" })
+  email!: string;
+
+  @ApiProperty({ example: "Unsubscribed successfully." })
+  message!: string;
+}
+
+export class EmailSesFeedbackResponseDto {
+  @ApiProperty({ example: true })
+  accepted!: boolean;
+
+  @ApiProperty({ example: false, required: false })
+  ignored?: boolean;
+
+  @ApiProperty({ example: "Bounce", required: false })
+  notificationType?: string;
+
+  @ApiProperty({ example: 1, required: false })
+  deactivated?: number;
+
+  @ApiProperty({ example: ["fan@example.com"], required: false })
+  emails?: string[];
+
+  @ApiProperty({ example: "topic_not_allowed", required: false })
+  reason?: string;
+}
+
+export class DailyDigestEnqueueResponseDto {
+  @ApiProperty({ example: "c0f4c51c-a27a-4a2f-a922-bcf086df06cf" })
+  digestId!: string;
+
+  @ApiProperty({ example: "2026-03-06" })
+  date!: string;
+
+  @ApiProperty({ example: 120 })
+  subscribers!: number;
+
+  @ApiProperty({ example: 120 })
+  queued!: number;
+}
+
 export class TeamDto {
   @ApiProperty({ example: "e1e2c5f3-3d6f-4d3a-9d6d-03b8f1a44e1d" })
   id!: string;
