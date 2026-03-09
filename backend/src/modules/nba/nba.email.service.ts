@@ -60,6 +60,18 @@ type DailyDigestGameAnalysis = {
   error: string | null;
 };
 
+type DailyDigestPreviousResult = {
+  gameId: string;
+  dateTimeUtc: string | null;
+  status: string | null;
+  season: number | null;
+  home: string;
+  away: string;
+  homeScore: number | null;
+  awayScore: number | null;
+  outcome: string | null;
+};
+
 @Injectable()
 export class NbaEmailService {
   private readonly logger = new Logger(NbaEmailService.name);
@@ -85,61 +97,109 @@ export class NbaEmailService {
       512
     );
 
-    const insertResult = await this.emailSubscriptionRepo
-      .createQueryBuilder()
-      .insert()
-      .into(EmailSubscription)
-      .values({
-        email,
-        isActive: true,
-        subscribedAt: now,
-        consentSource,
-        consentIp,
-        consentUserAgent,
-        unsubscribedAt: null,
-        unsubscribeReason: null,
-        lastWelcomeEmailSentAt: null,
-        lastWelcomeEmailError: null,
-        updatedAt: now
-      })
-      .orIgnore()
-      .execute();
-
-    const inserted = (insertResult.identifiers?.length ?? 0) > 0;
-    let reactivated = false;
-
-    if (!inserted) {
-      const reactivateResult = await this.emailSubscriptionRepo
-        .createQueryBuilder()
-        .update(EmailSubscription)
-        .set({
-          isActive: true,
-          subscribedAt: now,
-          consentSource,
-          consentIp,
-          consentUserAgent,
-          unsubscribedAt: null,
-          unsubscribeReason: null,
-          lastWelcomeEmailError: null,
-          updatedAt: now
-        })
-        .where("email = :email", { email })
-        .andWhere("is_active = false")
-        .execute();
-      reactivated = (reactivateResult.affected ?? 0) > 0;
+    const existingActive = await this.emailSubscriptionRepo.findOne({
+      where: { email, isActive: true }
+    });
+    if (existingActive) {
+      return {
+        id: existingActive.id,
+        email: existingActive.email,
+        isActive: existingActive.isActive,
+        subscribedAt: existingActive.subscribedAt,
+        consentSource: existingActive.consentSource,
+        consentIp: existingActive.consentIp,
+        consentUserAgent: existingActive.consentUserAgent,
+        alreadySubscribed: true,
+        welcomeEmailQueued: false,
+        message: "Email already subscribed."
+      };
     }
 
-    const subscription = await this.emailSubscriptionRepo.findOne({
+    const existing = await this.emailSubscriptionRepo.findOne({
       where: { email }
     });
-    if (!subscription) {
-      throw new Error("failed to load subscription");
+
+    let subscription = existing;
+    let welcomeEmailQueued = false;
+    if (subscription && !subscription.isActive) {
+      subscription.isActive = true;
+      subscription.subscribedAt = now;
+      subscription.consentSource = consentSource;
+      subscription.consentIp = consentIp;
+      subscription.consentUserAgent = consentUserAgent;
+      subscription.unsubscribedAt = null;
+      subscription.unsubscribeReason = null;
+      subscription.lastWelcomeEmailError = null;
+      subscription.updatedAt = now;
+      subscription = await this.emailSubscriptionRepo.save(subscription);
+      welcomeEmailQueued = true;
+    } else if (!subscription) {
+      try {
+        subscription = await this.emailSubscriptionRepo.save(
+          this.emailSubscriptionRepo.create({
+            email,
+            isActive: true,
+            subscribedAt: now,
+            consentSource,
+            consentIp,
+            consentUserAgent,
+            unsubscribedAt: null,
+            unsubscribeReason: null,
+            lastWelcomeEmailSentAt: null,
+            lastWelcomeEmailError: null,
+            updatedAt: now
+          })
+        );
+        welcomeEmailQueued = true;
+      } catch (error) {
+        if (!this.isEmailUniqueConflict(error)) {
+          throw error;
+        }
+
+        const conflictedActive = await this.emailSubscriptionRepo.findOne({
+          where: { email, isActive: true }
+        });
+        if (conflictedActive) {
+          return {
+            id: conflictedActive.id,
+            email: conflictedActive.email,
+            isActive: conflictedActive.isActive,
+            subscribedAt: conflictedActive.subscribedAt,
+            consentSource: conflictedActive.consentSource,
+            consentIp: conflictedActive.consentIp,
+            consentUserAgent: conflictedActive.consentUserAgent,
+            alreadySubscribed: true,
+            welcomeEmailQueued: false,
+            message: "Email already subscribed."
+          };
+        }
+
+        const conflicted = await this.emailSubscriptionRepo.findOne({
+          where: { email }
+        });
+        if (!conflicted) {
+          throw error;
+        }
+
+        conflicted.isActive = true;
+        conflicted.subscribedAt = now;
+        conflicted.consentSource = consentSource;
+        conflicted.consentIp = consentIp;
+        conflicted.consentUserAgent = consentUserAgent;
+        conflicted.unsubscribedAt = null;
+        conflicted.unsubscribeReason = null;
+        conflicted.lastWelcomeEmailError = null;
+        conflicted.updatedAt = now;
+        subscription = await this.emailSubscriptionRepo.save(conflicted);
+        welcomeEmailQueued = true;
+      }
     }
 
-    const shouldQueueWelcome = inserted || reactivated;
-    const alreadySubscribed = !shouldQueueWelcome;
+    if (!subscription) {
+      throw new Error("failed to create subscription");
+    }
 
-    if (shouldQueueWelcome) {
+    if (welcomeEmailQueued) {
       await this.queue.add("send-subscription-thank-you", {
         subscriptionId: subscription.id
       });
@@ -153,12 +213,36 @@ export class NbaEmailService {
       consentSource: subscription.consentSource,
       consentIp: subscription.consentIp,
       consentUserAgent: subscription.consentUserAgent,
-      alreadySubscribed,
-      welcomeEmailQueued: shouldQueueWelcome,
-      message: alreadySubscribed
+      alreadySubscribed: !welcomeEmailQueued,
+      welcomeEmailQueued,
+      message: !welcomeEmailQueued
         ? "Email already subscribed."
         : "Subscription successful. Welcome email queued."
     };
+  }
+
+  private isEmailUniqueConflict(error: unknown) {
+    const maybeError = error as {
+      code?: string;
+      detail?: string;
+      message?: string;
+      constraint?: string;
+    };
+    if (maybeError?.code === "23505") {
+      return true;
+    }
+    const text = [
+      maybeError?.constraint,
+      maybeError?.detail,
+      maybeError?.message
+    ]
+      .filter((item): item is string => typeof item === "string")
+      .join(" ")
+      .toLowerCase();
+    return (
+      text.includes("uq_email_subscription_email") ||
+      (text.includes("email_subscription") && text.includes("email"))
+    );
   }
 
   async unsubscribeByToken(input: { token: string; source?: string | null }) {
@@ -379,8 +463,15 @@ export class NbaEmailService {
     const games = Array.isArray(digest.payloadJson?.games)
       ? (digest.payloadJson.games as DailyDigestGameAnalysis[])
       : [];
-    if (games.length === 0) {
-      return { skipped: true, reason: "no_games" };
+    const yesterdayResults = Array.isArray(digest.payloadJson?.yesterdayResults)
+      ? (digest.payloadJson.yesterdayResults as DailyDigestPreviousResult[])
+      : [];
+    const yesterdayDate =
+      typeof digest.payloadJson?.yesterdayDate === "string"
+        ? digest.payloadJson.yesterdayDate
+        : this.addDaysToDateString(digest.digestDate, -1);
+    if (games.length === 0 && yesterdayResults.length === 0) {
+      return { skipped: true, reason: "no_games_or_results" };
     }
 
     const transporter = this.resolveTransporter();
@@ -408,6 +499,8 @@ export class NbaEmailService {
       digestDate: digest.digestDate,
       appName,
       games,
+      yesterdayDate,
+      yesterdayResults,
       unsubscribeUrl,
       privacyPolicyUrl
     });
@@ -434,6 +527,7 @@ export class NbaEmailService {
 
   async generateDailyDigest(dateInput?: string) {
     const date = this.resolveDailyDigestDate(dateInput);
+    const yesterdayDate = this.addDaysToDateString(date, -1);
     const sourceTz = this.resolveDailyDigestTimeZone();
     const existing = await this.dailyDigestRepo.findOne({
       where: { digestDate: date }
@@ -442,7 +536,16 @@ export class NbaEmailService {
     const existingGames = Array.isArray(existing?.payloadJson?.games)
       ? existing?.payloadJson?.games
       : [];
-    if (existing && existing.status === "generated" && existingGames.length > 0) {
+    const existingYesterdayResults = Array.isArray(
+      existing?.payloadJson?.yesterdayResults
+    )
+      ? existing?.payloadJson?.yesterdayResults
+      : [];
+    if (
+      existing &&
+      existing.status === "generated" &&
+      (existingGames.length > 0 || existingYesterdayResults.length > 0)
+    ) {
       return existing;
     }
 
@@ -543,6 +646,29 @@ export class NbaEmailService {
         }
       }
 
+      try {
+        await this.nbaService.syncFinalResults(yesterdayDate, {
+          includePlayerStats: false
+        });
+      } catch (error) {
+        this.logger.warn(
+          `daily digest pre-sync final results failed date=${yesterdayDate} error=${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      const yesterdayPage = await this.nbaService.listGames({
+        date: yesterdayDate,
+        page: 1,
+        pageSize: maxGames
+      });
+      const yesterdayResults = [...(yesterdayPage.data || [])]
+        .sort((a, b) => {
+          const aTime = a.dateTimeUtc ? new Date(a.dateTimeUtc).getTime() : 0;
+          const bTime = b.dateTimeUtc ? new Date(b.dateTimeUtc).getTime() : 0;
+          return aTime - bTime;
+        })
+        .map((game) => this.toDailyDigestPreviousResult(game, teamAbbrevById));
+
       await this.dailyDigestRepo.upsert(
         {
           digestDate: date,
@@ -553,9 +679,11 @@ export class NbaEmailService {
           error: null,
           payloadJson: {
             date,
+            yesterdayDate,
             sourceTz,
             generatedAt: new Date().toISOString(),
-            games: analyses
+            games: analyses,
+            yesterdayResults
           } as Record<string, any>,
           generatedAt: new Date(),
           updatedAt: new Date()
@@ -573,9 +701,11 @@ export class NbaEmailService {
           error: message,
           payloadJson: {
             date,
+            yesterdayDate,
             sourceTz,
             generatedAt: new Date().toISOString(),
-            games: []
+            games: [],
+            yesterdayResults: []
           } as Record<string, any>,
           updatedAt: new Date()
         },
@@ -684,6 +814,52 @@ export class NbaEmailService {
     }
   }
 
+  private addDaysToDateString(date: string, offsetDays: number) {
+    const parsed = new Date(`${date}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) {
+      return date;
+    }
+    parsed.setUTCDate(parsed.getUTCDate() + offsetDays);
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  private resolveDigestTimeLabel(timeZone: string) {
+    if (timeZone === "America/New_York") {
+      return "Game Time (ET)";
+    }
+    if (timeZone.toUpperCase() === "UTC") {
+      return "Game Time (UTC)";
+    }
+    return `Game Time (${timeZone})`;
+  }
+
+  private formatDigestGameTime(dateTimeUtc: string | null, timeZone: string) {
+    if (!dateTimeUtc) {
+      return "TBD";
+    }
+    const parsed = new Date(dateTimeUtc);
+    if (Number.isNaN(parsed.getTime())) {
+      return "TBD";
+    }
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZoneName: "short"
+      }).format(parsed);
+    } catch {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: "UTC",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZoneName: "short"
+      }).format(parsed);
+    }
+  }
+
   private toDailyDigestGameAnalysis(
     game: any,
     home: string,
@@ -715,51 +891,72 @@ export class NbaEmailService {
     };
   }
 
+  private toDailyDigestPreviousResult(
+    game: any,
+    teamAbbrevById: Map<string, string>
+  ): DailyDigestPreviousResult {
+    const home = teamAbbrevById.get(game.homeTeamId) || "HOME";
+    const away = teamAbbrevById.get(game.awayTeamId) || "AWAY";
+    const homeScore =
+      typeof game.homeScore === "number" ? game.homeScore : null;
+    const awayScore =
+      typeof game.awayScore === "number" ? game.awayScore : null;
+    let outcome: string | null = null;
+    if (homeScore !== null && awayScore !== null) {
+      if (homeScore > awayScore) {
+        outcome = home;
+      } else if (awayScore > homeScore) {
+        outcome = away;
+      } else {
+        outcome = "TIE";
+      }
+    }
+
+    return {
+      gameId: game.id,
+      dateTimeUtc: game.dateTimeUtc
+        ? new Date(game.dateTimeUtc).toISOString()
+        : null,
+      status: game.status ?? null,
+      season: game.season ?? null,
+      home,
+      away,
+      homeScore,
+      awayScore,
+      outcome
+    };
+  }
+
   private buildDailyDigestEmailContent(input: {
     digestDate: string;
     appName: string;
     games: DailyDigestGameAnalysis[];
+    yesterdayDate: string;
+    yesterdayResults: DailyDigestPreviousResult[];
     unsubscribeUrl: string;
     privacyPolicyUrl?: string;
   }) {
+    const digestTimeZone = this.resolveDailyDigestTimeZone();
+    const gameTimeLabel = this.resolveDigestTimeLabel(digestTimeZone);
+    const safeAppName = this.escapeHtml(input.appName);
+    const safeDigestDate = this.escapeHtml(input.digestDate);
+    const safeYesterdayDate = this.escapeHtml(input.yesterdayDate);
+    const safeUnsubscribeUrl = this.escapeHtml(input.unsubscribeUrl);
+    const safePrivacyPolicyUrl = this.escapeHtml(input.privacyPolicyUrl || "");
+
     const lines = [
-      `${input.appName} daily analysis for ${input.digestDate}`,
+      `${input.appName} | Daily NBA digest | ${input.digestDate}`,
       ""
     ];
 
-    for (const game of input.games) {
-      const matchup = `${game.away} @ ${game.home}`;
-      const confidence =
-        typeof game.analysis?.confidence === "number"
-          ? `${game.analysis.confidence.toFixed(1)}%`
-          : "N/A";
-      const winLine =
-        game.analysis &&
-        typeof game.analysis.homeWinPct === "number" &&
-        typeof game.analysis.awayWinPct === "number"
-          ? `${game.home} ${game.analysis.homeWinPct.toFixed(1)}% / ${game.away} ${game.analysis.awayWinPct.toFixed(1)}%`
-          : "win probability unavailable";
-      const summary = game.analysis?.analysis || game.error || "No analysis";
-
-      lines.push(`- ${matchup}`);
-      lines.push(`  confidence: ${confidence}`);
-      lines.push(`  ${winLine}`);
-      lines.push(`  ${summary}`);
+    lines.push(`Today analysis (${input.games.length} games):`);
+    if (input.games.length === 0) {
+      lines.push("- No scheduled games or model output available.");
       lines.push("");
-    }
-
-    lines.push(`Unsubscribe: ${input.unsubscribeUrl}`);
-    if (input.privacyPolicyUrl) {
-      lines.push(`Privacy policy: ${input.privacyPolicyUrl}`);
-    }
-
-    const rows = input.games
-      .map((game) => {
+    } else {
+      for (const game of input.games) {
         const matchup = `${game.away} @ ${game.home}`;
-        const score =
-          game.homeScore !== null && game.awayScore !== null
-            ? `${game.away} ${game.awayScore} - ${game.home} ${game.homeScore}`
-            : "-";
+        const gameTime = this.formatDigestGameTime(game.dateTimeUtc, digestTimeZone);
         const confidence =
           typeof game.analysis?.confidence === "number"
             ? `${game.analysis.confidence.toFixed(1)}%`
@@ -768,30 +965,163 @@ export class NbaEmailService {
           game.analysis &&
           typeof game.analysis.homeWinPct === "number" &&
           typeof game.analysis.awayWinPct === "number"
-            ? `${game.home} ${game.analysis.homeWinPct.toFixed(1)}% / ${game.away} ${game.analysis.awayWinPct.toFixed(1)}%`
+            ? `${game.away} ${game.analysis.awayWinPct.toFixed(1)}% / ${game.home} ${game.analysis.homeWinPct.toFixed(1)}%`
+            : "win probability unavailable";
+        const summary = game.analysis?.analysis || game.error || "No analysis";
+
+        lines.push(`- ${matchup} | ${gameTime}`);
+        lines.push(`  confidence: ${confidence} | ${winLine}`);
+        lines.push(`  summary: ${summary}`);
+        lines.push("");
+      }
+    }
+
+    lines.push(`Yesterday final results (${input.yesterdayDate}):`);
+    if (input.yesterdayResults.length === 0) {
+      lines.push("- No games or no final scores.");
+      lines.push("");
+    } else {
+      for (const game of input.yesterdayResults) {
+        const matchup = `${game.away} @ ${game.home}`;
+        const score =
+          game.homeScore !== null && game.awayScore !== null
+            ? `${game.away} ${game.awayScore} - ${game.home} ${game.homeScore}`
+            : "score unavailable";
+        const outcome = game.outcome ? `winner: ${game.outcome}` : "winner: N/A";
+        const status = game.status ? `status: ${game.status}` : "status: N/A";
+        lines.push(`- ${matchup} | ${score} | ${outcome} | ${status}`);
+        lines.push("");
+      }
+    }
+
+    lines.push(`Manage subscription: ${input.unsubscribeUrl}`);
+    if (input.privacyPolicyUrl) {
+      lines.push(`Privacy policy: ${input.privacyPolicyUrl}`);
+    }
+    lines.push("");
+    lines.push(`- ${input.appName}`);
+
+    const analysisRows = input.games
+      .map((game) => {
+        const matchup = `${game.away} @ ${game.home}`;
+        const gameTime = this.formatDigestGameTime(game.dateTimeUtc, digestTimeZone);
+        const confidence =
+          typeof game.analysis?.confidence === "number"
+            ? `${game.analysis.confidence.toFixed(1)}%`
+            : "N/A";
+        const winLine =
+          game.analysis &&
+          typeof game.analysis.homeWinPct === "number" &&
+          typeof game.analysis.awayWinPct === "number"
+            ? `${game.away} ${game.analysis.awayWinPct.toFixed(1)}% / ${game.home} ${game.analysis.homeWinPct.toFixed(1)}%`
             : "N/A";
         const summary = game.analysis?.analysis || game.error || "No analysis";
-        return `<tr><td>${this.escapeHtml(matchup)}</td><td>${this.escapeHtml(
-          score
-        )}</td><td>${this.escapeHtml(confidence)}</td><td>${this.escapeHtml(
-          winLine
-        )}</td><td>${this.escapeHtml(summary)}</td></tr>`;
+        return (
+          `<tr>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#ffffff;">${this.escapeHtml(matchup)}</td>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#ffffff;">${this.escapeHtml(gameTime)}</td>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#00FF41;font-weight:600;">${this.escapeHtml(confidence)}</td>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#c4c4c4;">${this.escapeHtml(winLine)}</td>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#c4c4c4;">${this.escapeHtml(summary)}</td>` +
+          `</tr>`
+        );
       })
       .join("");
+    const analysisRowsHtml =
+      analysisRows ||
+      '<tr><td colspan="5" style="padding:12px;border:1px solid #1a1a1a;color:#888888;">No scheduled games or model output available.</td></tr>';
+
+    const yesterdayRows = input.yesterdayResults
+      .map((game) => {
+        const matchup = `${game.away} @ ${game.home}`;
+        const score =
+          game.homeScore !== null && game.awayScore !== null
+            ? `${game.away} ${game.awayScore} - ${game.home} ${game.homeScore}`
+            : "N/A";
+        const outcome = game.outcome || "N/A";
+        const status = game.status || "N/A";
+        const outcomeColor = outcome === "N/A" ? "#888888" : "#00FF41";
+        return (
+          `<tr>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#ffffff;">${this.escapeHtml(matchup)}</td>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#ffffff;">${this.escapeHtml(score)}</td>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:${outcomeColor};font-weight:600;">${this.escapeHtml(outcome)}</td>` +
+          `<td style="padding:10px;border:1px solid #1a1a1a;color:#c4c4c4;">${this.escapeHtml(status)}</td>` +
+          `</tr>`
+        );
+      })
+      .join("");
+    const yesterdayRowsHtml =
+      yesterdayRows ||
+      '<tr><td colspan="4" style="padding:12px;border:1px solid #1a1a1a;color:#888888;">No games or no final scores.</td></tr>';
 
     const privacyHtml = input.privacyPolicyUrl
-      ? `<p><a href="${input.privacyPolicyUrl}">Privacy policy</a></p>`
+      ? `<a href="${safePrivacyPolicyUrl}" style="color:#00FF41;text-decoration:underline;">Privacy policy</a>`
       : "";
+    const footerLinks = [
+      `<a href="${safeUnsubscribeUrl}" style="color:#00FF41;text-decoration:underline;">Unsubscribe</a>`,
+      privacyHtml
+    ]
+      .filter(Boolean)
+      .join('&nbsp;&nbsp;|&nbsp;&nbsp;');
 
-    const html =
-      `<p>${this.escapeHtml(input.appName)} daily analysis for <strong>${this.escapeHtml(
-        input.digestDate
-      )}</strong></p>` +
-      '<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;">' +
-      "<thead><tr><th>Matchup</th><th>Score</th><th>Confidence</th><th>Win Probabilities</th><th>Summary</th></tr></thead>" +
-      `<tbody>${rows}</tbody></table>` +
-      `<p><a href="${input.unsubscribeUrl}">Unsubscribe</a></p>` +
-      privacyHtml;
+    const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:24px;background:#050505;color:#ffffff;font-family:'JetBrains Mono','SFMono-Regular',Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:860px;margin:0 auto;border-collapse:collapse;background:#0a0a0a;border:1px solid #1a1a1a;">
+      <tr>
+        <td style="padding:20px 24px;background:#050505;color:#ffffff;border-bottom:1px solid #1a1a1a;">
+          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#00FF41;">${safeAppName}</div>
+          <h1 style="margin:8px 0 6px 0;font-size:24px;line-height:1.3;color:#ffffff;text-shadow:0 0 12px rgba(0,255,65,0.25);">Daily NBA Briefing · ${safeDigestDate}</h1>
+          <p style="margin:0;font-size:14px;line-height:1.5;color:#888888;">Signal first, no filler. Today: ${input.games.length} analyzed games. Yesterday: ${input.yesterdayResults.length} finals.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:20px 24px 10px 24px;">
+          <h2 style="margin:0 0 12px 0;font-size:18px;color:#00FF41;">Today Analysis</h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px;line-height:1.5;">
+            <thead>
+              <tr>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Matchup</th>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">${this.escapeHtml(gameTimeLabel)}</th>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Confidence</th>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Win Probabilities</th>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Model Summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${analysisRowsHtml}
+            </tbody>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:10px 24px 20px 24px;">
+          <h2 style="margin:0 0 12px 0;font-size:18px;color:#00FF41;">Yesterday Final Results (${safeYesterdayDate})</h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px;line-height:1.5;">
+            <thead>
+              <tr>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Matchup</th>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Final Score</th>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Winner</th>
+                <th align="left" style="padding:10px;background:#050505;border:1px solid #1a1a1a;color:#00cc34;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${yesterdayRowsHtml}
+            </tbody>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:16px 24px;background:#050505;border-top:1px solid #1a1a1a;font-size:12px;line-height:1.6;color:#888888;">
+          <p style="margin:0 0 8px 0;">${footerLinks}</p>
+          <p style="margin:0;color:#888888;">Model output is probabilistic and may be wrong. Use it as one input, not trading advice.</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
 
     return {
       text: lines.join("\n"),
@@ -966,12 +1296,39 @@ export class NbaEmailService {
       throw new Error("missing EMAIL_FROM or EMAIL_SMTP_USER");
     }
 
+    const safeAppName = this.escapeHtml(appName);
+    const safeEmail = this.escapeHtml(subscription.email);
+    const safeUnsubscribeUrl = this.escapeHtml(unsubscribeUrl);
+    const safePrivacyPolicyUrl = this.escapeHtml(privacyPolicyUrl);
+
     const plainPrivacy = privacyPolicyUrl
-      ? `\nPrivacy policy: ${privacyPolicyUrl}`
+      ? `Privacy policy: ${privacyPolicyUrl}`
       : "";
     const htmlPrivacy = privacyPolicyUrl
-      ? `<p><a href="${privacyPolicyUrl}">Privacy policy</a></p>`
+      ? `<a href="${safePrivacyPolicyUrl}" style="color:#00FF41;text-decoration:underline;">Privacy policy</a>`
       : "";
+    const footerLinks = [
+      `<a href="${safeUnsubscribeUrl}" style="color:#00FF41;text-decoration:underline;">Unsubscribe</a>`,
+      htmlPrivacy
+    ]
+      .filter(Boolean)
+      .join('&nbsp;&nbsp;|&nbsp;&nbsp;');
+
+    const textLines = [
+      `${appName} subscription confirmed`,
+      "",
+      "Thanks for subscribing.",
+      "We will send one daily NBA briefing at ET 00:00.",
+      "- Today: model analysis for scheduled games",
+      "- Yesterday: final scores only",
+      "",
+      `Subscriber: ${subscription.email}`,
+      `Manage subscription: ${unsubscribeUrl}`
+    ];
+    if (plainPrivacy) {
+      textLines.push(plainPrivacy);
+    }
+    textLines.push("", `- ${appName}`);
 
     await transporter.sendMail({
       from,
@@ -981,18 +1338,37 @@ export class NbaEmailService {
         "List-Unsubscribe": `<${unsubscribeUrl}>`,
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
       },
-      text:
-        `Hi,\n\nThanks for subscribing to ${appName} notifications.\n` +
-        "We'll keep you updated with NBA related updates.\n\n" +
-        `If you want to unsubscribe, open: ${unsubscribeUrl}\n` +
-        plainPrivacy +
-        `\n\n- ${appName}`,
-      html:
-        `<p>Hi,</p><p>Thanks for subscribing to <strong>${appName}</strong> notifications.</p>` +
-        "<p>We'll keep you updated with NBA related updates.</p>" +
-        `<p><a href="${unsubscribeUrl}">Unsubscribe</a></p>` +
-        htmlPrivacy +
-        `<p>- ${appName}</p>`
+      text: textLines.join("\n"),
+      html: `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:24px;background:#050505;color:#ffffff;font-family:'JetBrains Mono','SFMono-Regular',Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:0 auto;border-collapse:collapse;background:#0a0a0a;border:1px solid #1a1a1a;">
+      <tr>
+        <td style="padding:20px 24px;background:#050505;color:#ffffff;border-bottom:1px solid #1a1a1a;">
+          <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#00FF41;">${safeAppName}</div>
+          <h1 style="margin:8px 0 6px 0;font-size:22px;line-height:1.3;color:#ffffff;text-shadow:0 0 10px rgba(0,255,65,0.25);">Subscription Confirmed</h1>
+          <p style="margin:0;font-size:14px;line-height:1.5;color:#888888;">Daily NBA briefings will be sent at ET 00:00.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:20px 24px 10px 24px;">
+          <p style="margin:0 0 12px 0;font-size:14px;line-height:1.6;color:#ffffff;">We keep it short and actionable:</p>
+          <ul style="margin:0 0 12px 20px;padding:0;color:#c4c4c4;font-size:14px;line-height:1.7;">
+            <li>Today schedule model analysis</li>
+            <li>Yesterday final results (no analysis)</li>
+          </ul>
+          <p style="margin:0 0 12px 0;font-size:13px;color:#888888;">Subscriber: <strong style="color:#00FF41;">${safeEmail}</strong></p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:16px 24px;background:#050505;border-top:1px solid #1a1a1a;font-size:12px;line-height:1.6;color:#888888;">
+          <p style="margin:0 0 8px 0;">${footerLinks}</p>
+          <p style="margin:0;color:#888888;">You can unsubscribe at any time with one click.</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`
     });
 
     this.logger.log(`welcome email sent to ${subscription.email}`);

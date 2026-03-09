@@ -107,7 +107,7 @@ NBA 查詢：
 - `GET /nba/subscriptions/email/unsubscribe?token=...`（token 化退訂連結）
 - `POST /nba/subscriptions/email/unsubscribe`（支援 one-click List-Unsubscribe POST）
 - `POST /nba/subscriptions/email/ses-feedback`（SES SNS bounce/complaint webhook，自動停寄）
-- `POST /nba/subscriptions/email/daily-digest?date=YYYY-MM-DD`（手動觸發每日分析摘要寄送）
+- `POST /nba/subscriptions/email/daily-digest?date=YYYY-MM-DD`（手動觸發每日摘要寄送：今日賽程分析 + 昨日賽果）
 
 Polymarket 查詢：
 - `GET /polymarket/events`、`GET /polymarket/markets`
@@ -166,7 +166,7 @@ npm run polymarket:sync
 - NBA scoreboard：`*/10 * * * *`
 - NBA final results：`*/15 * * * *`
 - NBA injury report：`30 * * * *`
-- NBA daily analysis digest：`0 0 * * *`（ET 00:00；先備份到 DB，再寄給所有訂閱者）
+- NBA daily analysis digest：`0 0 * * *`（ET 00:00；先備份到 DB，再寄給所有訂閱者，內容含今日分析與昨日賽果）
 - Polymarket NBA 同步：`0 * * * *`（每小時）
   - 條件 A：`active = true` 且 `end_date > now`
   - 條件 B：`start_date` 落在「今天～未來 7 天」
