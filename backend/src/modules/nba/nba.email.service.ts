@@ -101,6 +101,10 @@ export class NbaEmailService {
       where: { email, isActive: true }
     });
     if (existingActive) {
+      const recentlySubscribed = this.isRecentlySubscribed(
+        existingActive.subscribedAt,
+        now
+      );
       return {
         id: existingActive.id,
         email: existingActive.email,
@@ -109,9 +113,11 @@ export class NbaEmailService {
         consentSource: existingActive.consentSource,
         consentIp: existingActive.consentIp,
         consentUserAgent: existingActive.consentUserAgent,
-        alreadySubscribed: true,
-        welcomeEmailQueued: false,
-        message: "Email already subscribed."
+        alreadySubscribed: !recentlySubscribed,
+        welcomeEmailQueued: recentlySubscribed,
+        message: recentlySubscribed
+          ? "Subscription successful. Welcome email queued."
+          : "Email already subscribed."
       };
     }
 
@@ -160,6 +166,10 @@ export class NbaEmailService {
           where: { email, isActive: true }
         });
         if (conflictedActive) {
+          const recentlySubscribed = this.isRecentlySubscribed(
+            conflictedActive.subscribedAt,
+            now
+          );
           return {
             id: conflictedActive.id,
             email: conflictedActive.email,
@@ -168,9 +178,11 @@ export class NbaEmailService {
             consentSource: conflictedActive.consentSource,
             consentIp: conflictedActive.consentIp,
             consentUserAgent: conflictedActive.consentUserAgent,
-            alreadySubscribed: true,
-            welcomeEmailQueued: false,
-            message: "Email already subscribed."
+            alreadySubscribed: !recentlySubscribed,
+            welcomeEmailQueued: recentlySubscribed,
+            message: recentlySubscribed
+              ? "Subscription successful. Welcome email queued."
+              : "Email already subscribed."
           };
         }
 
@@ -243,6 +255,24 @@ export class NbaEmailService {
       text.includes("uq_email_subscription_email") ||
       (text.includes("email_subscription") && text.includes("email"))
     );
+  }
+
+  private isRecentlySubscribed(
+    subscribedAt: Date | string | null | undefined,
+    now: Date
+  ) {
+    if (!subscribedAt) {
+      return false;
+    }
+    const subscribedMs =
+      subscribedAt instanceof Date
+        ? subscribedAt.getTime()
+        : new Date(subscribedAt).getTime();
+    if (!Number.isFinite(subscribedMs)) {
+      return false;
+    }
+    const elapsedMs = now.getTime() - subscribedMs;
+    return elapsedMs >= 0 && elapsedMs <= 30_000;
   }
 
   async unsubscribeByToken(input: { token: string; source?: string | null }) {

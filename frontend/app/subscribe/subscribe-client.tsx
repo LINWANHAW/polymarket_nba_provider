@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 type SubscribePayload = {
@@ -32,16 +32,22 @@ export function SubscribeClient() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SubscribePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
 
   const trimmedEmail = useMemo(() => email.trim(), [email]);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (submitLockRef.current) {
+      return;
+    }
+    submitLockRef.current = true;
     setError(null);
     setResult(null);
 
     if (!trimmedEmail) {
       setError("Email is required.");
+      submitLockRef.current = false;
       return;
     }
 
@@ -79,6 +85,7 @@ export function SubscribeClient() {
       setError("Network error. Please try again.");
     } finally {
       setLoading(false);
+      submitLockRef.current = false;
     }
   };
 
